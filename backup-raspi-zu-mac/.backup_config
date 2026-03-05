@@ -10,7 +10,7 @@
 # --- MAC VERBINDUNG ---
 USER_MAC="markusschweitzer"
 IP_MAC="192.168.178.116"
-TARGET_DIR="/Users/markusschweitzer/Backups"
+TARGET_DIR="/Users/markusschweitzer/Backupsv6"
 SSH_KEY="/home/markus/.ssh/id_ed25519"
 
 # --- MAC RETRY-MECHANISMUS ---
