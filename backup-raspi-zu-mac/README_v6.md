@@ -1,4 +1,4 @@
-# 📦 Raspberry Pi Backup Script v6.0
+# 📦 Raspberry Pi Backup Script v6.1
 
 Automatisches Backup-System für Raspberry Pi → Mac mit Docker-Container-Management, Retry-Mechanismus und umfassender Fehlerbehandlung.
 
@@ -16,7 +16,46 @@ Sichert automatisch folgende Daten vom Raspberry Pi auf einen Mac:
 
 ---
 
-## ✨ Neue Features in v6.0
+## ✨ Neu in v6.1 (2026-03-05)
+
+### 🎯 Portabilität - Start aus jedem Verzeichnis
+
+Das Script kann jetzt **aus jedem beliebigen Verzeichnis** gestartet werden!
+
+**Vorher (v6.0):**
+```bash
+# Musste im Script-Verzeichnis sein
+cd /home/markus
+sudo ./backup_to_mac-v6.sh
+```
+
+**Jetzt (v6.1):**
+```bash
+# Funktioniert von überall!
+sudo /pfad/zum/backup_to_mac-v6.sh
+
+# Oder mit Symlink
+sudo /usr/local/bin/backup
+```
+
+#### 🔍 Intelligente Konfigurationssuche
+
+Das Script sucht automatisch nach `.backup_config` und `.backup_secrets` in:
+1. **Im gleichen Verzeichnis wie das Script** (empfohlen für portable Installation)
+2. **Im Home-Verzeichnis des ausführenden Benutzers** (`$HOME`)
+3. **In `/home/markus/`** (Fallback für Kompatibilität mit v6.0)
+
+#### ✅ Vorteile
+
+- ✅ Cron-Jobs mit absoluten Pfaden möglich
+- ✅ Symlinks funktionieren einwandfrei
+- ✅ Mehrere Benutzer können das Script nutzen
+- ✅ Einfachere Installation in `/usr/local/bin` oder `/opt`
+- ✅ Abwärtskompatibel mit v6.0-Konfigurationen
+
+---
+
+## ✨ Features in v6.0
 
 ### 🔥 Hauptverbesserungen
 
@@ -110,9 +149,17 @@ sudo ./backup_to_mac-v6.sh
 ```bash
 sudo crontab -e
 
-# Täglich um 2:00 Uhr
+# Täglich um 2:00 Uhr - mit absolutem Pfad (funktioniert von überall!)
 0 2 * * * /home/markus/backup_to_mac-v6.sh >> /home/markus/backup_cron.log 2>&1
+
+# Alternative: Wenn Script in /usr/local/bin liegt
+0 2 * * * /usr/local/bin/backup_to_mac-v6.sh >> /var/log/backup_cron.log 2>&1
+
+# Alternative: Mit explizitem Pfad zum Script-Verzeichnis
+0 2 * * * /opt/backup-scripts/backup_to_mac-v6.sh >> /var/log/backup_cron.log 2>&1
 ```
+
+**💡 Tipp:** Dank v6.1 kannst du das Script überall ablegen - der Cron-Job findet die Konfigurationsdateien automatisch!
 
 **Fertig!** 🎉
 
@@ -356,6 +403,23 @@ Siehe `QUICK_START_GUIDE.md` für detaillierte Anleitung.
 
 ## 📝 Changelog
 
+### v6.1 (2026-03-05)
+
+**🎯 Portabilität**
+- ✅ Script kann aus jedem Verzeichnis gestartet werden
+- ✅ Intelligente Suche nach Konfigurationsdateien (Script-Dir → $HOME → /home/markus)
+- ✅ Automatische Erkennung des Script-Verzeichnisses (funktioniert mit Symlinks)
+- ✅ Verbesserte Fehlermeldungen mit Suchpfad-Anzeige
+- ✅ `.backup_secrets.template` hinzugefügt
+- ✅ `.gitignore` für Secrets-Schutz
+- ✅ CHANGELOG.md hinzugefügt
+
+**Cron-Job Beispiel für v6.1:**
+```bash
+# Täglich um 2:00 Uhr - funktioniert von überall!
+0 2 * * * /pfad/zum/backup_to_mac-v6.sh >> /var/log/backup_cron.log 2>&1
+```
+
 ### v6.0 (2026-03-05)
 
 - ✅ Retry-Mechanismus für Mac-Verbindung (5x mit 2 Min Wartezeit)
@@ -409,9 +473,11 @@ Mit Unterstützung von:
 
 ---
 
-**Version**: 6.0  
-**Datum**: 2026-03-05  
+**Version**: 6.1
+**Datum**: 2026-03-05
 **Status**: ✅ Produktionsbereit
+
+**Neu in v6.1:** 🎯 Portabilität - Start aus jedem Verzeichnis!
 
 ---
 

@@ -1,0 +1,16 @@
+# Secrets - NIEMALS committen!
+.backup_secrets
+
+# Log-Dateien
+backup_log.txt
+backup_cron.log
+*.log
+
+# Temporäre Dateien
+*.tmp
+*.swp
+*~
+
+# Backup-Dateien
+*.backup
+*.bak

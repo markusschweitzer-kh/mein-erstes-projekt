@@ -1,10 +1,13 @@
 #!/bin/bash
 
 ################################################################################
-# Raspberry Pi Backup Script v6.0
+# Raspberry Pi Backup Script v6.1
 # Sichert Docker-Stacks und Paperless-Daten auf einen Mac
-# 
-# Neue Features in v6:
+#
+# Neue Features in v6.1:
+# - Script kann aus jedem Verzeichnis gestartet werden
+#
+# Features in v6.0:
 # - Retry-Mechanismus für schlafenden Mac
 # - Externalisierte Konfiguration und Secrets
 # - Robuste Container-Wiederherstellung mit Cleanup-Trap
@@ -15,21 +18,68 @@
 # - Backup-Verifizierung (Stichproben)
 ################################################################################
 
+# --- SCRIPT-VERZEICHNIS ERMITTELN ---
+# Ermittelt das Verzeichnis, in dem das Script liegt (funktioniert auch bei Symlinks)
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
+SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+
 # --- KONFIGURATION LADEN ---
-CONFIG_FILE="/home/markus/.backup_config"
-SECRETS_FILE="/home/markus/.backup_secrets"
+# Suche Konfigurationsdateien in folgender Reihenfolge:
+# 1. Im gleichen Verzeichnis wie das Script
+# 2. Im Home-Verzeichnis des ausführenden Benutzers
+# 3. Im Home-Verzeichnis von 'markus' (Fallback für Kompatibilität)
 
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "❌ FEHLER: Konfigurationsdatei nicht gefunden: $CONFIG_FILE"
-    echo "Bitte erstelle die Datei mit den notwendigen Einstellungen."
+find_config_file() {
+    local filename="$1"
+    local search_paths=(
+        "$SCRIPT_DIR/$filename"
+        "$HOME/$filename"
+        "/home/markus/$filename"
+    )
+    
+    for path in "${search_paths[@]}"; do
+        if [ -f "$path" ]; then
+            echo "$path"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+CONFIG_FILE=$(find_config_file ".backup_config")
+SECRETS_FILE=$(find_config_file ".backup_secrets")
+
+if [ -z "$CONFIG_FILE" ]; then
+    echo "❌ FEHLER: Konfigurationsdatei '.backup_config' nicht gefunden!"
+    echo ""
+    echo "Gesucht in folgenden Verzeichnissen:"
+    echo "  1. $SCRIPT_DIR/.backup_config"
+    echo "  2. $HOME/.backup_config"
+    echo "  3. /home/markus/.backup_config"
+    echo ""
+    echo "Bitte erstelle die Datei in einem dieser Verzeichnisse."
+    echo "Tipp: Kopiere die Beispiel-Konfiguration aus dem Repository."
     exit 1
 fi
 
-if [ ! -f "$SECRETS_FILE" ]; then
-    echo "❌ FEHLER: Secrets-Datei nicht gefunden: $SECRETS_FILE"
-    echo "Bitte erstelle die Datei mit Discord Webhook und Uptime Kuma URL."
+if [ -z "$SECRETS_FILE" ]; then
+    echo "❌ FEHLER: Secrets-Datei '.backup_secrets' nicht gefunden!"
+    echo ""
+    echo "Gesucht in folgenden Verzeichnissen:"
+    echo "  1. $SCRIPT_DIR/.backup_secrets"
+    echo "  2. $HOME/.backup_secrets"
+    echo "  3. /home/markus/.backup_secrets"
+    echo ""
+    echo "Bitte erstelle die Datei in einem dieser Verzeichnisse."
+    echo "Tipp: Verwende die Template-Datei '.backup_secrets.template' als Vorlage."
     exit 1
 fi
+
+echo "ℹ️  Script-Verzeichnis: $SCRIPT_DIR"
+echo "ℹ️  Konfiguration: $CONFIG_FILE"
+echo "ℹ️  Secrets: $SECRETS_FILE"
+echo ""
 
 source "$CONFIG_FILE"
 source "$SECRETS_FILE"
