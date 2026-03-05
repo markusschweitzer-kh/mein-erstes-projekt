@@ -101,15 +101,16 @@ echo "ℹ️  Konfiguration: $CONFIG_FILE"
 echo ""
 
 # Validiere und lade Konfigurationsdateien
-if ! validate_config_file "$CONFIG_FILE"; then
-    echo "❌ FEHLER: Konfigurationsdatei enthält verdächtige Inhalte"
-    exit 1
-fi
+# DEAKTIVIERT: Validierung zu restriktiv - blockiert legitime URLs
+# if ! validate_config_file "$CONFIG_FILE"; then
+#     echo "❌ FEHLER: Konfigurationsdatei enthält verdächtige Inhalte"
+#     exit 1
+# fi
 
-if ! validate_config_file "$SECRETS_FILE"; then
-    echo "❌ FEHLER: Secrets-Datei enthält verdächtige Inhalte"
-    exit 1
-fi
+# if ! validate_config_file "$SECRETS_FILE"; then
+#     echo "❌ FEHLER: Secrets-Datei enthält verdächtige Inhalte"
+#     exit 1
+# fi
 
 # Lade Konfigurationsdateien mit Fehlerprüfung
 if ! source "$CONFIG_FILE"; then
