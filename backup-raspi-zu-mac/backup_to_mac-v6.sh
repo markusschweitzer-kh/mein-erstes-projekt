@@ -18,9 +18,19 @@
 # - Backup-Verifizierung (Stichproben)
 ################################################################################
 
+# --- VERSION ---
+VERSION="6.1"
+
 # --- SCRIPT-VERZEICHNIS ERMITTELN ---
 # Ermittelt das Verzeichnis, in dem das Script liegt (funktioniert auch bei Symlinks)
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
+# Portable Lösung die auf Linux und macOS funktioniert
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SCRIPT_SOURCE" ]; do
+    SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+    SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+    [[ $SCRIPT_SOURCE != /* ]] && SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 
 # --- KONFIGURATION LADEN ---
@@ -45,6 +55,16 @@ find_config_file() {
     done
     
     return 1
+}
+
+validate_config_file() {
+    local file="$1"
+    # Prüfe auf verdächtige Shell-Befehle in der Konfigurationsdatei
+    if grep -qE '(\$\(|`|;|\||&|>|<)' "$file" 2>/dev/null; then
+        echo "⚠️ WARNUNG: Verdächtige Zeichen in $file gefunden"
+        return 1
+    fi
+    return 0
 }
 
 CONFIG_FILE=$(find_config_file ".backup_config")
@@ -78,11 +98,29 @@ fi
 
 echo "ℹ️  Script-Verzeichnis: $SCRIPT_DIR"
 echo "ℹ️  Konfiguration: $CONFIG_FILE"
-echo "ℹ️  Secrets: $SECRETS_FILE"
 echo ""
 
-source "$CONFIG_FILE"
-source "$SECRETS_FILE"
+# Validiere und lade Konfigurationsdateien
+if ! validate_config_file "$CONFIG_FILE"; then
+    echo "❌ FEHLER: Konfigurationsdatei enthält verdächtige Inhalte"
+    exit 1
+fi
+
+if ! validate_config_file "$SECRETS_FILE"; then
+    echo "❌ FEHLER: Secrets-Datei enthält verdächtige Inhalte"
+    exit 1
+fi
+
+# Lade Konfigurationsdateien mit Fehlerprüfung
+if ! source "$CONFIG_FILE"; then
+    echo "❌ FEHLER: Fehler beim Laden der Konfigurationsdatei"
+    exit 1
+fi
+
+if ! source "$SECRETS_FILE"; then
+    echo "❌ FEHLER: Fehler beim Laden der Secrets-Datei"
+    exit 1
+fi
 
 # --- LOGGING SETUP ---
 exec > >(tee -a "$LOGFILE") 2>&1
@@ -122,7 +160,7 @@ abort_with_error() {
 # --- START ---
 START_TIME=$(date +%s)
 log_msg "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-log_msg "🚀 BACKUP START v6.0: Stacks, Paperless, Immich"
+log_msg "🚀 BACKUP START v${VERSION}: Stacks, Paperless, Immich"
 log_msg "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # --- PRE-FLIGHT CHECKS ---
@@ -402,7 +440,7 @@ JSON_DATA="
       {\"name\": \"🗑️ Gelöscht\", \"value\": \"${DEL_FILES}\", \"inline\": true},
       {\"name\": \"🔄 Mac Versuche\", \"value\": \"$attempt von $MAC_RETRY_ATTEMPTS\", \"inline\": true}
     ],
-    \"footer\": {\"text\": \"v6.0 | Quellen: stacks, paperless-config, paperless-data, immich-backups\"},
+    \"footer\": {\"text\": \"v${VERSION} | Quellen: stacks, paperless-config, paperless-data, immich-backups\"},
     \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
   }]
 }"
