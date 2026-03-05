@@ -1,0 +1,48 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Backup-Konfiguration für backup_to_mac-v6.sh
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 
+# WICHTIG: Diese Datei nach /home/markus/.backup_config kopieren
+# Berechtigungen: chmod 644 /home/markus/.backup_config
+#
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# --- MAC VERBINDUNG ---
+USER_MAC="markusschweitzer"
+IP_MAC="192.168.178.116"
+TARGET_DIR="/Users/markusschweitzer/Backups"
+SSH_KEY="/home/markus/.ssh/id_ed25519"
+
+# --- MAC RETRY-MECHANISMUS ---
+# Anzahl der Versuche, den Mac zu erreichen (falls er schläft)
+MAC_RETRY_ATTEMPTS=5
+
+# Wartezeit zwischen Versuchen in Sekunden (2 Minuten = 120s)
+MAC_RETRY_DELAY=120
+
+# --- QUELLVERZEICHNISSE ---
+SOURCE_STACKS="/opt/stacks"
+SOURCE_PL_CONF="/home/markus/paperless-ngx"
+SOURCE_PL_DATA="/home/markus/paperless-data"
+SOURCE_IMMICH_BACKUPS="/opt/stacks/immich/library/backups"
+
+# --- LOGGING ---
+LOGFILE="/home/markus/backup_log.txt"
+
+# --- CONTAINER-MANAGEMENT ---
+# Nur diese Container werden gestoppt (durch Leerzeichen getrennt)
+CONTAINERS_TO_STOP="paperless-webserver-1 paperless-redis-1 paperless-gotenberg-1 paperless-tika-1"
+
+# Name des Paperless-Containers für den Export
+PAPERLESS_CONTAINER="paperless-webserver-1"
+
+# --- ARCHIV-ROTATION ---
+# Alte Archive werden nach dieser Anzahl Tage gelöscht (56 = 8 Wochen)
+ARCHIVE_RETENTION_DAYS=56
+
+# --- BACKUP-VERIFIZIERUNG ---
+# Backup-Verifizierung aktivieren? (true/false)
+ENABLE_VERIFICATION=true
+
+# Anzahl zufälliger Dateien für Stichproben-Verifizierung
+VERIFY_SAMPLE_SIZE=5
