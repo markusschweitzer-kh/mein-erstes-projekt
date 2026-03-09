@@ -31,7 +31,7 @@ LOGFILE="/home/markus/backup_log.txt"
 
 # --- CONTAINER-MANAGEMENT ---
 # Nur diese Container werden gestoppt (durch Leerzeichen getrennt)
-CONTAINERS_TO_STOP="paperless-webserver-1 paperless-redis-1 paperless-gotenberg-1 paperless-tika-1"
+CONTAINERS_TO_STOP="paperless-webserver-1 paperless-db-1 paperless-broker-1 paperless-gotenberg-1 paperless-tika-1"
 
 # Name des Paperless-Containers für den Export
 PAPERLESS_CONTAINER="paperless-webserver-1"
