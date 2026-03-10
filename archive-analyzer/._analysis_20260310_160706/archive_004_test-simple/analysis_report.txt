@@ -1,0 +1,86 @@
+═══════════════════════════════════════════════════════════════════
+  ARCHIVE ANALYZER REPORT
+  Version: 1.0.0
+  Datum: 2026-03-10 16:07:12
+═══════════════════════════════════════════════════════════════════
+
+QUELLE UND ZIEL
+───────────────────────────────────────────────────────────────────
+Quell-Archiv:                /Users/markusschweitzer/Documents/git-markus/mein-erstes-projekt/archive-analyzer/test-simple.zip
+Ausgabeverzeichnis:          ._analysis_20260310_160706/archive_004_test-simple
+
+ZUSAMMENFASSUNG
+───────────────────────────────────────────────────────────────────
+Gesamtanzahl Dateien:        23
+Gesamtgröße:                 150.66 KB (154282 Bytes)
+
+DATEIGRÖSSENVERTEILUNG
+───────────────────────────────────────────────────────────────────
+Dateien mit 0 Bytes:         3
+Dateien mit ≤10 Bytes:       7
+Dateien mit ≤20 Bytes:       1
+
+TOP 20 GRÖSSTE DATEIEN
+───────────────────────────────────────────────────────────────────
+100.00 KB       ._analysis_20260310_160706/archive_004_test-simple/binary1.bin
+50.00 KB        ._analysis_20260310_160706/archive_004_test-simple/binary2.dat
+121.00 B        ._analysis_20260310_160706/archive_004_test-simple/data.xml
+110.00 B        ._analysis_20260310_160706/archive_004_test-simple/config.json
+103.00 B        ._analysis_20260310_160706/archive_004_test-simple/test.py
+65.00 B         ._analysis_20260310_160706/archive_004_test-simple/data.csv
+55.00 B         ._analysis_20260310_160706/archive_004_test-simple/readme.md
+53.00 B         ._analysis_20260310_160706/archive_004_test-simple/text2.txt
+32.00 B         ._analysis_20260310_160706/archive_004_test-simple/text1.txt
+32.00 B         ._analysis_20260310_160706/archive_004_test-simple/link-to-text.txt
+31.00 B         ._analysis_20260310_160706/archive_004_test-simple/script.sh
+26.00 B         ._analysis_20260310_160706/archive_004_test-simple/subdir/nested.txt
+18.00 B         ._analysis_20260310_160706/archive_004_test-simple/medium1.txt
+6.00 B          ._analysis_20260310_160706/archive_004_test-simple/small1.txt
+5.00 B          ._analysis_20260310_160706/archive_004_test-simple/video.mp4
+5.00 B          ._analysis_20260310_160706/archive_004_test-simple/small2.dat
+5.00 B          ._analysis_20260310_160706/archive_004_test-simple/image.png
+5.00 B          ._analysis_20260310_160706/archive_004_test-simple/image.jpg
+5.00 B          ._analysis_20260310_160706/archive_004_test-simple/document.pdf
+5.00 B          ._analysis_20260310_160706/archive_004_test-simple/audio.mp3
+
+DATEIENDUNGEN
+───────────────────────────────────────────────────────────────────
+txt                  8 Datei(en)
+dat                  2 Datei(en)
+xml                  1 Datei(en)
+sh                   1 Datei(en)
+py                   1 Datei(en)
+png                  1 Datei(en)
+pdf                  1 Datei(en)
+mp4                  1 Datei(en)
+mp3                  1 Datei(en)
+md                   1 Datei(en)
+log                  1 Datei(en)
+json                 1 Datei(en)
+jpg                  1 Datei(en)
+csv                  1 Datei(en)
+bin                  1 Datei(en)
+
+DATEITYPEN
+───────────────────────────────────────────────────────────────────
+Text-Dateien:                21
+Binär-Dateien:               2
+Binär-Dateien Gesamtgröße:   150.00 KB (153600 Bytes)
+
+BINÄRDATEIEN DETAILS
+───────────────────────────────────────────────────────────────────
+100.00 KB       ._analysis_20260310_160706/archive_004_test-simple/binary1.bin
+50.00 KB        ._analysis_20260310_160706/archive_004_test-simple/binary2.dat
+
+SPEZIELLE UNIX-DATEIEN
+───────────────────────────────────────────────────────────────────
+Symbolische Links:           0
+Hard Links:                  0
+Named Pipes (FIFOs):         0
+Sockets:                     0
+Block Devices:               0
+Character Devices:           0
+
+═══════════════════════════════════════════════════════════════════
+  Ende des Reports
+═══════════════════════════════════════════════════════════════════

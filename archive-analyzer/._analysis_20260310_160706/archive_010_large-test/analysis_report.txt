@@ -1,0 +1,52 @@
+═══════════════════════════════════════════════════════════════════
+  ARCHIVE ANALYZER REPORT
+  Version: 1.0.0
+  Datum: 2026-03-10 16:07:20
+═══════════════════════════════════════════════════════════════════
+
+QUELLE UND ZIEL
+───────────────────────────────────────────────────────────────────
+Quell-Archiv:                /Users/markusschweitzer/Documents/git-markus/mein-erstes-projekt/archive-analyzer/large-test.zip
+Ausgabeverzeichnis:          ._analysis_20260310_160706/archive_010_large-test
+
+ZUSAMMENFASSUNG
+───────────────────────────────────────────────────────────────────
+Gesamtanzahl Dateien:        1
+Gesamtgröße:                 5.00 MB (5242880 Bytes)
+
+DATEIGRÖSSENVERTEILUNG
+───────────────────────────────────────────────────────────────────
+Dateien mit 0 Bytes:         0
+Dateien mit ≤10 Bytes:       0
+Dateien mit ≤20 Bytes:       0
+
+TOP 20 GRÖSSTE DATEIEN
+───────────────────────────────────────────────────────────────────
+5.00 MB         ._analysis_20260310_160706/archive_010_large-test/large-test.bin
+
+DATEIENDUNGEN
+───────────────────────────────────────────────────────────────────
+bin                  1 Datei(en)
+
+DATEITYPEN
+───────────────────────────────────────────────────────────────────
+Text-Dateien:                0
+Binär-Dateien:               1
+Binär-Dateien Gesamtgröße:   5.00 MB (5242880 Bytes)
+
+BINÄRDATEIEN DETAILS
+───────────────────────────────────────────────────────────────────
+5.00 MB         ._analysis_20260310_160706/archive_010_large-test/large-test.bin
+
+SPEZIELLE UNIX-DATEIEN
+───────────────────────────────────────────────────────────────────
+Symbolische Links:           0
+Hard Links:                  0
+Named Pipes (FIFOs):         0
+Sockets:                     0
+Block Devices:               0
+Character Devices:           0
+
+═══════════════════════════════════════════════════════════════════
+  Ende des Reports
+═══════════════════════════════════════════════════════════════════

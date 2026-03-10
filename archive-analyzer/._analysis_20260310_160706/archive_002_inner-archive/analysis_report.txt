@@ -1,0 +1,86 @@
+═══════════════════════════════════════════════════════════════════
+  ARCHIVE ANALYZER REPORT
+  Version: 1.0.0
+  Datum: 2026-03-10 16:07:09
+═══════════════════════════════════════════════════════════════════
+
+QUELLE UND ZIEL
+───────────────────────────────────────────────────────────────────
+Quell-Archiv:                /Users/markusschweitzer/Documents/git-markus/mein-erstes-projekt/archive-analyzer/test-nested-level2_analysis/nested-data-level2/test-nested-level1_extracted/nested-data/inner-archive.zip
+Ausgabeverzeichnis:          ._analysis_20260310_160706/archive_002_inner-archive
+
+ZUSAMMENFASSUNG
+───────────────────────────────────────────────────────────────────
+Gesamtanzahl Dateien:        23
+Gesamtgröße:                 150.66 KB (154282 Bytes)
+
+DATEIGRÖSSENVERTEILUNG
+───────────────────────────────────────────────────────────────────
+Dateien mit 0 Bytes:         3
+Dateien mit ≤10 Bytes:       7
+Dateien mit ≤20 Bytes:       1
+
+TOP 20 GRÖSSTE DATEIEN
+───────────────────────────────────────────────────────────────────
+100.00 KB       ._analysis_20260310_160706/archive_002_inner-archive/binary1.bin
+50.00 KB        ._analysis_20260310_160706/archive_002_inner-archive/binary2.dat
+121.00 B        ._analysis_20260310_160706/archive_002_inner-archive/data.xml
+110.00 B        ._analysis_20260310_160706/archive_002_inner-archive/config.json
+103.00 B        ._analysis_20260310_160706/archive_002_inner-archive/test.py
+65.00 B         ._analysis_20260310_160706/archive_002_inner-archive/data.csv
+55.00 B         ._analysis_20260310_160706/archive_002_inner-archive/readme.md
+53.00 B         ._analysis_20260310_160706/archive_002_inner-archive/text2.txt
+32.00 B         ._analysis_20260310_160706/archive_002_inner-archive/text1.txt
+32.00 B         ._analysis_20260310_160706/archive_002_inner-archive/link-to-text.txt
+31.00 B         ._analysis_20260310_160706/archive_002_inner-archive/script.sh
+26.00 B         ._analysis_20260310_160706/archive_002_inner-archive/subdir/nested.txt
+18.00 B         ._analysis_20260310_160706/archive_002_inner-archive/medium1.txt
+6.00 B          ._analysis_20260310_160706/archive_002_inner-archive/small1.txt
+5.00 B          ._analysis_20260310_160706/archive_002_inner-archive/video.mp4
+5.00 B          ._analysis_20260310_160706/archive_002_inner-archive/small2.dat
+5.00 B          ._analysis_20260310_160706/archive_002_inner-archive/image.png
+5.00 B          ._analysis_20260310_160706/archive_002_inner-archive/image.jpg
+5.00 B          ._analysis_20260310_160706/archive_002_inner-archive/document.pdf
+5.00 B          ._analysis_20260310_160706/archive_002_inner-archive/audio.mp3
+
+DATEIENDUNGEN
+───────────────────────────────────────────────────────────────────
+txt                  8 Datei(en)
+dat                  2 Datei(en)
+xml                  1 Datei(en)
+sh                   1 Datei(en)
+py                   1 Datei(en)
+png                  1 Datei(en)
+pdf                  1 Datei(en)
+mp4                  1 Datei(en)
+mp3                  1 Datei(en)
+md                   1 Datei(en)
+log                  1 Datei(en)
+json                 1 Datei(en)
+jpg                  1 Datei(en)
+csv                  1 Datei(en)
+bin                  1 Datei(en)
+
+DATEITYPEN
+───────────────────────────────────────────────────────────────────
+Text-Dateien:                21
+Binär-Dateien:               2
+Binär-Dateien Gesamtgröße:   150.00 KB (153600 Bytes)
+
+BINÄRDATEIEN DETAILS
+───────────────────────────────────────────────────────────────────
+100.00 KB       ._analysis_20260310_160706/archive_002_inner-archive/binary1.bin
+50.00 KB        ._analysis_20260310_160706/archive_002_inner-archive/binary2.dat
+
+SPEZIELLE UNIX-DATEIEN
+───────────────────────────────────────────────────────────────────
+Symbolische Links:           0
+Hard Links:                  0
+Named Pipes (FIFOs):         0
+Sockets:                     0
+Block Devices:               0
+Character Devices:           0
+
+═══════════════════════════════════════════════════════════════════
+  Ende des Reports
+═══════════════════════════════════════════════════════════════════

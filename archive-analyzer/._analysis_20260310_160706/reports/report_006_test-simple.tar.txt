@@ -1,0 +1,90 @@
+═══════════════════════════════════════════════════════════════════
+  ARCHIVE ANALYZER REPORT
+  Version: 1.0.0
+  Datum: 2026-03-10 16:07:16
+═══════════════════════════════════════════════════════════════════
+
+QUELLE UND ZIEL
+───────────────────────────────────────────────────────────────────
+Quell-Archiv:                /Users/markusschweitzer/Documents/git-markus/mein-erstes-projekt/archive-analyzer/test-simple.tar.gz
+Ausgabeverzeichnis:          ._analysis_20260310_160706/archive_006_test-simple.tar
+
+ZUSAMMENFASSUNG
+───────────────────────────────────────────────────────────────────
+Gesamtanzahl Dateien:        22
+Gesamtgröße:                 150.63 KB (154250 Bytes)
+
+DATEIGRÖSSENVERTEILUNG
+───────────────────────────────────────────────────────────────────
+Dateien mit 0 Bytes:         3
+Dateien mit ≤10 Bytes:       7
+Dateien mit ≤20 Bytes:       1
+
+TOP 20 GRÖSSTE DATEIEN
+───────────────────────────────────────────────────────────────────
+100.00 KB       ._analysis_20260310_160706/archive_006_test-simple.tar/binary1.bin
+50.00 KB        ._analysis_20260310_160706/archive_006_test-simple.tar/binary2.dat
+121.00 B        ._analysis_20260310_160706/archive_006_test-simple.tar/data.xml
+110.00 B        ._analysis_20260310_160706/archive_006_test-simple.tar/config.json
+103.00 B        ._analysis_20260310_160706/archive_006_test-simple.tar/test.py
+65.00 B         ._analysis_20260310_160706/archive_006_test-simple.tar/data.csv
+55.00 B         ._analysis_20260310_160706/archive_006_test-simple.tar/readme.md
+53.00 B         ._analysis_20260310_160706/archive_006_test-simple.tar/text2.txt
+32.00 B         ._analysis_20260310_160706/archive_006_test-simple.tar/text1.txt
+31.00 B         ._analysis_20260310_160706/archive_006_test-simple.tar/script.sh
+26.00 B         ._analysis_20260310_160706/archive_006_test-simple.tar/subdir/nested.txt
+18.00 B         ._analysis_20260310_160706/archive_006_test-simple.tar/medium1.txt
+6.00 B          ._analysis_20260310_160706/archive_006_test-simple.tar/small1.txt
+5.00 B          ._analysis_20260310_160706/archive_006_test-simple.tar/video.mp4
+5.00 B          ._analysis_20260310_160706/archive_006_test-simple.tar/small2.dat
+5.00 B          ._analysis_20260310_160706/archive_006_test-simple.tar/image.png
+5.00 B          ._analysis_20260310_160706/archive_006_test-simple.tar/image.jpg
+5.00 B          ._analysis_20260310_160706/archive_006_test-simple.tar/document.pdf
+5.00 B          ._analysis_20260310_160706/archive_006_test-simple.tar/audio.mp3
+0.00 B          ._analysis_20260310_160706/archive_006_test-simple.tar/subdir/empty-nested.txt
+
+DATEIENDUNGEN
+───────────────────────────────────────────────────────────────────
+txt                  7 Datei(en)
+dat                  2 Datei(en)
+xml                  1 Datei(en)
+sh                   1 Datei(en)
+py                   1 Datei(en)
+png                  1 Datei(en)
+pdf                  1 Datei(en)
+mp4                  1 Datei(en)
+mp3                  1 Datei(en)
+md                   1 Datei(en)
+log                  1 Datei(en)
+json                 1 Datei(en)
+jpg                  1 Datei(en)
+csv                  1 Datei(en)
+bin                  1 Datei(en)
+
+DATEITYPEN
+───────────────────────────────────────────────────────────────────
+Text-Dateien:                20
+Binär-Dateien:               2
+Binär-Dateien Gesamtgröße:   150.00 KB (153600 Bytes)
+
+BINÄRDATEIEN DETAILS
+───────────────────────────────────────────────────────────────────
+100.00 KB       ._analysis_20260310_160706/archive_006_test-simple.tar/binary1.bin
+50.00 KB        ._analysis_20260310_160706/archive_006_test-simple.tar/binary2.dat
+
+SPEZIELLE UNIX-DATEIEN
+───────────────────────────────────────────────────────────────────
+Symbolische Links:           1
+Hard Links:                  0
+Named Pipes (FIFOs):         0
+Sockets:                     0
+Block Devices:               0
+Character Devices:           0
+
+SYMBOLISCHE LINKS DETAILS
+───────────────────────────────────────────────────────────────────
+._analysis_20260310_160706/archive_006_test-simple.tar/link-to-text.txt -> text1.txt
+
+═══════════════════════════════════════════════════════════════════
+  Ende des Reports
+═══════════════════════════════════════════════════════════════════

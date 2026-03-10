@@ -1,0 +1,96 @@
+═══════════════════════════════════════════════════════════════════
+  ARCHIVE ANALYZER REPORT
+  Version: 1.0.0
+  Datum: 2026-03-10 16:07:15
+═══════════════════════════════════════════════════════════════════
+
+QUELLE UND ZIEL
+───────────────────────────────────────────────────────────────────
+Quell-Archiv:                /Users/markusschweitzer/Documents/git-markus/mein-erstes-projekt/archive-analyzer/test-mixed-formats.tar.gz
+Ausgabeverzeichnis:          ._analysis_20260310_160706/archive_005_test-mixed-formats.tar
+
+ZUSAMMENFASSUNG
+───────────────────────────────────────────────────────────────────
+Gesamtanzahl Dateien:        48
+Gesamtgröße:                 409.62 KB (419453 Bytes)
+
+DATEIGRÖSSENVERTEILUNG
+───────────────────────────────────────────────────────────────────
+Dateien mit 0 Bytes:         6
+Dateien mit ≤10 Bytes:       14
+Dateien mit ≤20 Bytes:       2
+
+TOP 20 GRÖSSTE DATEIEN
+───────────────────────────────────────────────────────────────────
+100.00 KB       ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar_extracted/binary1.bin
+100.00 KB       ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple_extracted/binary1.bin
+54.24 KB        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.zip
+54.05 KB        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar.gz
+50.00 KB        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar_extracted/binary2.dat
+50.00 KB        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple_extracted/binary2.dat
+121.00 B        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar_extracted/data.xml
+121.00 B        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple_extracted/data.xml
+110.00 B        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar_extracted/config.json
+110.00 B        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple_extracted/config.json
+103.00 B        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar_extracted/test.py
+103.00 B        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple_extracted/test.py
+65.00 B         ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar_extracted/data.csv
+65.00 B         ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple_extracted/data.csv
+55.00 B         ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar_extracted/readme.md
+55.00 B         ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple_extracted/readme.md
+53.00 B         ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar_extracted/text2.txt
+53.00 B         ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple_extracted/text2.txt
+32.00 B         ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar_extracted/text1.txt
+32.00 B         ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple_extracted/text1.txt
+
+DATEIENDUNGEN
+───────────────────────────────────────────────────────────────────
+txt                  16 Datei(en)
+dat                  4 Datei(en)
+xml                  2 Datei(en)
+sh                   2 Datei(en)
+py                   2 Datei(en)
+png                  2 Datei(en)
+pdf                  2 Datei(en)
+mp4                  2 Datei(en)
+mp3                  2 Datei(en)
+md                   2 Datei(en)
+log                  2 Datei(en)
+json                 2 Datei(en)
+jpg                  2 Datei(en)
+csv                  2 Datei(en)
+bin                  2 Datei(en)
+zip                  1 Datei(en)
+gz                   1 Datei(en)
+
+DATEITYPEN
+───────────────────────────────────────────────────────────────────
+Text-Dateien:                42
+Binär-Dateien:               6
+Binär-Dateien Gesamtgröße:   408.29 KB (418094 Bytes)
+
+BINÄRDATEIEN DETAILS
+───────────────────────────────────────────────────────────────────
+100.00 KB       ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar_extracted/binary1.bin
+100.00 KB       ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple_extracted/binary1.bin
+54.24 KB        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.zip
+54.05 KB        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar.gz
+50.00 KB        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar_extracted/binary2.dat
+50.00 KB        ._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple_extracted/binary2.dat
+
+SPEZIELLE UNIX-DATEIEN
+───────────────────────────────────────────────────────────────────
+Symbolische Links:           1
+Hard Links:                  0
+Named Pipes (FIFOs):         0
+Sockets:                     0
+Block Devices:               0
+Character Devices:           0
+
+SYMBOLISCHE LINKS DETAILS
+───────────────────────────────────────────────────────────────────
+._analysis_20260310_160706/archive_005_test-mixed-formats.tar/mixed-archives/test-simple.tar_extracted/link-to-text.txt -> text1.txt
+
+═══════════════════════════════════════════════════════════════════
+  Ende des Reports
+═══════════════════════════════════════════════════════════════════
