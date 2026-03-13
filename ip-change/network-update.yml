@@ -71,7 +71,7 @@
         var: csv_data
         verbosity: 1
 
-    - name: Hole aktuellen Hostname
+    - name: Hole aktuellen Hostname (short)
       command: hostname -s
       register: current_hostname_short
       changed_when: false
@@ -84,16 +84,30 @@
 
     - name: Setze aktuellen Hostname
       set_fact:
-        current_hostname: "{{ current_hostname_short.stdout }}"
+        current_hostname_short_name: "{{ current_hostname_short.stdout }}"
+        current_hostname_fqdn_name: "{{ current_hostname_fqdn.stdout }}"
 
-    - name: Suche passenden Eintrag in CSV
+    - name: Debug - Zeige aktuelle Hostnamen
+      debug:
+        msg:
+          - "Hostname (short): {{ current_hostname_short_name }}"
+          - "Hostname (FQDN): {{ current_hostname_fqdn_name }}"
+
+    - name: Suche passenden Eintrag in CSV (FQDN)
       set_fact:
-        host_config: "{{ csv_data.list | selectattr('Hostname-alt', 'search', current_hostname) | first | default({}) }}"
+        host_config: "{{ csv_data.list | selectattr('Hostname-alt', 'equalto', current_hostname_fqdn_name) | first | default({}) }}"
+
+    - name: Suche passenden Eintrag in CSV (short name) falls FQDN nicht gefunden
+      set_fact:
+        host_config: "{{ csv_data.list | selectattr('Hostname-alt', 'search', '^' + current_hostname_short_name + '\\.') | first | default({}) }}"
+      when: host_config == {}
 
     - name: Prüfe ob Host in CSV gefunden wurde
       fail:
         msg: |
-          FEHLER: Hostname '{{ current_hostname }}' wurde nicht in der CSV-Datei gefunden!
+          FEHLER: Hostname wurde nicht in der CSV-Datei gefunden!
+          Hostname (short): {{ current_hostname_short_name }}
+          Hostname (FQDN): {{ current_hostname_fqdn_name }}
           Bitte prüfen Sie die CSV-Datei und den Hostnamen.
       when: host_config == {}
 
