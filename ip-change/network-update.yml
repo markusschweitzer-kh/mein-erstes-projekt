@@ -1,0 +1,384 @@
+---
+#==============================================================================
+# Ansible Playbook: Red Hat Linux Netzwerkkonfiguration Update
+#==============================================================================
+# Dieses Playbook aktualisiert Hostname und Netzwerkkonfiguration basierend
+# auf der ip-change.csv Datei.
+#
+# Verwendung:
+#   # Lokal ausführen:
+#   ansible-playbook -i localhost, -c local network-update.yml
+#
+#   # Remote ausführen:
+#   ansible-playbook -i inventory.ini network-update.yml
+#
+#   # Mit spezifischer CSV-Datei:
+#   ansible-playbook network-update.yml -e "csv_file=/path/to/ip-change.csv"
+#
+#   # Dry-Run (Check Mode):
+#   ansible-playbook network-update.yml --check --diff
+#==============================================================================
+
+- name: Update Red Hat Linux Network Configuration
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    csv_file: "{{ playbook_dir }}/ip-change.csv"
+    backup_dir: "{{ playbook_dir }}/backups"
+    log_dir: "{{ playbook_dir }}/logs"
+    new_gateway: "9.125.190.1"
+    new_netmask: "255.255.255.128"
+    new_prefix: "25"  # /25 = 255.255.255.128
+    
+  tasks:
+    #==========================================================================
+    # Vorbereitungen und Validierung
+    #==========================================================================
+    
+    - name: Erstelle Backup- und Log-Verzeichnisse
+      delegate_to: localhost
+      become: no
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ backup_dir }}"
+        - "{{ log_dir }}"
+      run_once: yes
+
+    - name: Prüfe ob CSV-Datei existiert
+      delegate_to: localhost
+      become: no
+      stat:
+        path: "{{ csv_file }}"
+      register: csv_stat
+      failed_when: not csv_stat.stat.exists
+
+    - name: Lese CSV-Datei ein
+      delegate_to: localhost
+      become: no
+      read_csv:
+        path: "{{ csv_file }}"
+        delimiter: ';'
+        skipinitialspace: yes
+      register: csv_data
+
+    - name: Zeige gelesene CSV-Daten (Debug)
+      debug:
+        var: csv_data
+        verbosity: 1
+
+    - name: Hole aktuellen Hostname
+      command: hostname -s
+      register: current_hostname_short
+      changed_when: false
+
+    - name: Hole FQDN
+      command: hostname -f
+      register: current_hostname_fqdn
+      changed_when: false
+      failed_when: false
+
+    - name: Setze aktuellen Hostname
+      set_fact:
+        current_hostname: "{{ current_hostname_short.stdout }}"
+
+    - name: Suche passenden Eintrag in CSV
+      set_fact:
+        host_config: "{{ csv_data.list | selectattr('Hostname-alt', 'search', current_hostname) | first | default({}) }}"
+
+    - name: Prüfe ob Host in CSV gefunden wurde
+      fail:
+        msg: |
+          FEHLER: Hostname '{{ current_hostname }}' wurde nicht in der CSV-Datei gefunden!
+          Bitte prüfen Sie die CSV-Datei und den Hostnamen.
+      when: host_config == {}
+
+    - name: Zeige gefundene Konfiguration
+      debug:
+        msg:
+          - "Gefundene Konfiguration für Host: {{ current_hostname }}"
+          - "Hostname alt: {{ host_config['Hostname-alt'] }}"
+          - "Hostname neu: {{ host_config['Hostname-neu'] }}"
+          - "IP alt (9.x): {{ host_config['Ip-alt'] }}"
+          - "IP neu (9.x): {{ host_config['ip-neu'] }}"
+          - "IP alt (10.x): {{ host_config['10-alt'] }}"
+          - "IP neu (10.x): {{ host_config['10-neu'] }}"
+
+    #==========================================================================
+    # Identifiziere Netzwerkschnittstellen
+    #==========================================================================
+
+    - name: Hole alle Netzwerkschnittstellen
+      shell: |
+        ip -o addr show | grep -E 'inet ' | awk '{print $2, $4}' | grep -v '127.0.0.1'
+      register: network_interfaces
+      changed_when: false
+
+    - name: Parse Netzwerkschnittstellen
+      set_fact:
+        interfaces_info: "{{ network_interfaces.stdout_lines }}"
+
+    - name: Identifiziere Interface mit 9.x IP
+      set_fact:
+        interface_9x: "{{ item.split()[0] }}"
+        current_ip_9x: "{{ item.split()[1].split('/')[0] }}"
+      when: item.split()[1] | regex_search('^9\\.')
+      loop: "{{ interfaces_info }}"
+
+    - name: Identifiziere Interface mit 10.x IP
+      set_fact:
+        interface_10x: "{{ item.split()[0] }}"
+        current_ip_10x: "{{ item.split()[1].split('/')[0] }}"
+      when: item.split()[1] | regex_search('^10\\.')
+      loop: "{{ interfaces_info }}"
+
+    - name: Validiere gefundene Interfaces
+      fail:
+        msg: "FEHLER: Konnte nicht beide Netzwerkschnittstellen (9.x und 10.x) identifizieren!"
+      when: interface_9x is not defined or interface_10x is not defined
+
+    - name: Zeige identifizierte Interfaces
+      debug:
+        msg:
+          - "Interface 9.x: {{ interface_9x }} ({{ current_ip_9x }})"
+          - "Interface 10.x: {{ interface_10x }} ({{ current_ip_10x }})"
+
+    #==========================================================================
+    # Validierung der aktuellen Konfiguration
+    #==========================================================================
+
+    - name: Validiere aktuelle IP-Adressen gegen CSV
+      block:
+        - name: Prüfe 9.x IP
+          assert:
+            that:
+              - current_ip_9x == host_config['Ip-alt']
+            fail_msg: |
+              FEHLER: 9.x IP stimmt nicht überein!
+              Erwartet: {{ host_config['Ip-alt'] }}
+              Gefunden: {{ current_ip_9x }}
+            success_msg: "9.x IP validiert: {{ current_ip_9x }}"
+
+        - name: Prüfe 10.x IP
+          assert:
+            that:
+              - current_ip_10x == host_config['10-alt']
+            fail_msg: |
+              FEHLER: 10.x IP stimmt nicht überein!
+              Erwartet: {{ host_config['10-alt'] }}
+              Gefunden: {{ current_ip_10x }}
+            success_msg: "10.x IP validiert: {{ current_ip_10x }}"
+
+    - name: Validierung erfolgreich
+      debug:
+        msg: "✓ System erfolgreich identifiziert. Änderungen können durchgeführt werden."
+
+    #==========================================================================
+    # Backup der aktuellen Konfiguration
+    #==========================================================================
+
+    - name: Erstelle Backup-Verzeichnis für diesen Host
+      file:
+        path: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      become: no
+
+    - name: Backup Hostname-Konfiguration
+      fetch:
+        src: /etc/hostname
+        dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}/hostname"
+        flat: yes
+      failed_when: false
+
+    - name: Backup Netzwerk-Konfigurationsdateien
+      fetch:
+        src: "/etc/sysconfig/network-scripts/ifcfg-{{ item }}"
+        dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}/ifcfg-{{ item }}"
+        flat: yes
+      loop:
+        - "{{ interface_9x }}"
+        - "{{ interface_10x }}"
+      failed_when: false
+
+    #==========================================================================
+    # Hostname ändern
+    #==========================================================================
+
+    - name: Setze neuen Hostname in /etc/hostname
+      copy:
+        content: "{{ host_config['Hostname-neu'].split('.')[0] }}\n"
+        dest: /etc/hostname
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+
+    - name: Setze neuen Hostname mit hostnamectl
+      command: "hostnamectl set-hostname {{ host_config['Hostname-neu'] }}"
+      changed_when: true
+
+    - name: Update /etc/hosts mit neuem Hostname
+      lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1'
+        line: "127.0.1.1 {{ host_config['Hostname-neu'] }} {{ host_config['Hostname-neu'].split('.')[0] }}"
+        backup: yes
+
+    #==========================================================================
+    # Netzwerkkonfiguration für 9.x Interface
+    #==========================================================================
+
+    - name: Konfiguriere 9.x Interface ({{ interface_9x }})
+      template:
+        src: ifcfg-template.j2
+        dest: "/etc/sysconfig/network-scripts/ifcfg-{{ interface_9x }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      vars:
+        device: "{{ interface_9x }}"
+        ipaddr: "{{ host_config['ip-neu'] }}"
+        netmask: "{{ new_netmask }}"
+        gateway: "{{ new_gateway }}"
+        is_primary: yes
+
+    #==========================================================================
+    # Netzwerkkonfiguration für 10.x Interface
+    #==========================================================================
+
+    - name: Konfiguriere 10.x Interface ({{ interface_10x }})
+      template:
+        src: ifcfg-template.j2
+        dest: "/etc/sysconfig/network-scripts/ifcfg-{{ interface_10x }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      vars:
+        device: "{{ interface_10x }}"
+        ipaddr: "{{ host_config['10-neu'] }}"
+        netmask: "{{ new_netmask }}"
+        gateway: ""
+        is_primary: no
+
+    #==========================================================================
+    # Netzwerk neu starten
+    #==========================================================================
+
+    - name: Prüfe NetworkManager Status
+      systemd:
+        name: NetworkManager
+      register: nm_status
+      failed_when: false
+
+    - name: Starte Netzwerkinterfaces neu (NetworkManager)
+      shell: |
+        nmcli connection reload
+        nmcli connection down {{ item }}
+        nmcli connection up {{ item }}
+      loop:
+        - "{{ interface_9x }}"
+        - "{{ interface_10x }}"
+      when: nm_status.status.ActiveState == "active"
+      register: nm_restart
+      failed_when: false
+
+    - name: Starte Netzwerkinterfaces neu (network service)
+      shell: |
+        ifdown {{ item }}
+        ifup {{ item }}
+      loop:
+        - "{{ interface_9x }}"
+        - "{{ interface_10x }}"
+      when: nm_status.status.ActiveState != "active"
+      register: network_restart
+      failed_when: false
+
+    #==========================================================================
+    # Validierung der Änderungen
+    #==========================================================================
+
+    - name: Warte kurz auf Netzwerk
+      pause:
+        seconds: 5
+
+    - name: Validiere neuen Hostname
+      command: hostname -f
+      register: new_hostname_check
+      changed_when: false
+
+    - name: Validiere neue IP-Adressen
+      shell: ip -o addr show | grep -E 'inet ' | awk '{print $2, $4}'
+      register: new_ips_check
+      changed_when: false
+
+    - name: Zeige Ergebnis
+      debug:
+        msg:
+          - "=== Änderungen erfolgreich durchgeführt ==="
+          - "Neuer Hostname: {{ new_hostname_check.stdout }}"
+          - "Neue Netzwerkkonfiguration:"
+          - "{{ new_ips_check.stdout_lines }}"
+          - ""
+          - "Alte Konfiguration:"
+          - "  Hostname: {{ host_config['Hostname-alt'] }}"
+          - "  9.x IP: {{ host_config['Ip-alt'] }}"
+          - "  10.x IP: {{ host_config['10-alt'] }}"
+          - ""
+          - "Neue Konfiguration:"
+          - "  Hostname: {{ host_config['Hostname-neu'] }}"
+          - "  9.x IP: {{ host_config['ip-neu'] }}"
+          - "  10.x IP: {{ host_config['10-neu'] }}"
+          - "  Gateway: {{ new_gateway }}"
+          - "  Netmask: {{ new_netmask }}"
+
+    #==========================================================================
+    # Logging
+    #==========================================================================
+
+    - name: Erstelle Change-Log
+      delegate_to: localhost
+      become: no
+      copy:
+        content: |
+          ================================================================================
+          Netzwerkkonfiguration Update Log
+          ================================================================================
+          Datum: {{ ansible_date_time.iso8601 }}
+          Host: {{ inventory_hostname }}
+          
+          ÄNDERUNGEN:
+          -----------
+          Hostname:
+            Alt: {{ host_config['Hostname-alt'] }}
+            Neu: {{ host_config['Hostname-neu'] }}
+          
+          Interface {{ interface_9x }} (9.x Netzwerk):
+            IP Alt: {{ host_config['Ip-alt'] }}
+            IP Neu: {{ host_config['ip-neu'] }}
+            Gateway: {{ new_gateway }}
+            Netmask: {{ new_netmask }}
+          
+          Interface {{ interface_10x }} (10.x Netzwerk):
+            IP Alt: {{ host_config['10-alt'] }}
+            IP Neu: {{ host_config['10-neu'] }}
+            Netmask: {{ new_netmask }}
+          
+          VALIDIERUNG:
+          ------------
+          Neuer Hostname: {{ new_hostname_check.stdout }}
+          Neue IPs:
+          {{ new_ips_check.stdout }}
+          
+          Backup-Verzeichnis: {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}
+          ================================================================================
+        dest: "{{ log_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}.log"
+
+# Made with Bob

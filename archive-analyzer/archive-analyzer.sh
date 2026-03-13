@@ -21,6 +21,10 @@
 VERSION="2.0.1"
 MAX_RECURSION_DEPTH=50
 
+# Globale Variable für übersprungene Dateien
+SKIPPED_FILES_LOG=""
+TOTAL_SKIPPED_FILES=0
+
 # Farben für Ausgabe
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -161,41 +165,122 @@ extract_archive() {
             fi
             ;;
         tar.gz)
-            # FIX: Verwende absoluten Pfad und wechsle ins Zielverzeichnis
+            # FIX: Extrahiere in temporäres Verzeichnis mit kurzem Namen
             # um Pfadlängen-Probleme zu vermeiden
+            local temp_extract_dir="/tmp/arc_$$_$RANDOM"
+            mkdir -p "$temp_extract_dir"
+            
             local abs_archive
             abs_archive="$(cd "$(dirname "$archive")" && pwd)/$(basename "$archive")"
-            if (cd "$target_dir" && tar -xzf "$abs_archive" 2>&1); then
+            
+            # Temporäre Datei für TAR-Fehlerausgabe
+            local tar_errors=$(mktemp)
+            
+            # Versuche mit tar -xzf und erfasse Fehler
+            if (cd "$temp_extract_dir" && tar -xzf "$abs_archive" 2>"$tar_errors"); then
+                rm -f "$tar_errors"
+                # Verschiebe Inhalt ins Zielverzeichnis
+                mv "$temp_extract_dir"/* "$target_dir/" 2>/dev/null
+                mv "$temp_extract_dir"/.[!.]* "$target_dir/" 2>/dev/null
+                rmdir "$temp_extract_dir"
                 return 0
             else
-                # Fallback: Versuche gunzip + tar im Zielverzeichnis
+                local tar_exit=$?
+                # Wenn tar teilweise erfolgreich war (Exit Code 1 = Warnungen), akzeptiere es
+                if [ $tar_exit -eq 1 ]; then
+                    # Parse Fehlerausgabe und zähle übersprungene Dateien
+                    local skipped_count=$(grep -c "Can't create" "$tar_errors" 2>/dev/null || echo 0)
+                    TOTAL_SKIPPED_FILES=$((TOTAL_SKIPPED_FILES + skipped_count))
+                    
+                    print_warning "Archiv teilweise entpackt: $(basename "$archive")"
+                    print_info "$skipped_count Datei(en) wegen zu langer Pfade übersprungen"
+                    
+                    # Speichere Details der übersprungenen Dateien
+                    if [ -n "$SKIPPED_FILES_LOG" ]; then
+                        echo "" >> "$SKIPPED_FILES_LOG"
+                        echo "=== Archiv: $(basename "$archive") ===" >> "$SKIPPED_FILES_LOG"
+                        grep "Can't create" "$tar_errors" | sed "s/.*Can't create '//" | sed "s/': No such.*//" >> "$SKIPPED_FILES_LOG" 2>/dev/null
+                    fi
+                    
+                    rm -f "$tar_errors"
+                    mv "$temp_extract_dir"/* "$target_dir/" 2>/dev/null
+                    mv "$temp_extract_dir"/.[!.]* "$target_dir/" 2>/dev/null
+                    rmdir "$temp_extract_dir"
+                    return 0
+                fi
+                
+                # Fallback: Versuche gunzip + tar
                 print_warning "Erster Versuch fehlgeschlagen, versuche gunzip + tar für $archive"
-                if (cd "$target_dir" && gunzip -c "$abs_archive" | tar -xf - 2>&1); then
+                if (cd "$temp_extract_dir" && gunzip -c "$abs_archive" 2>/dev/null | tar -xf - 2>"$tar_errors"); then
+                    rm -f "$tar_errors"
+                    mv "$temp_extract_dir"/* "$target_dir/" 2>/dev/null
+                    mv "$temp_extract_dir"/.[!.]* "$target_dir/" 2>/dev/null
+                    rmdir "$temp_extract_dir"
                     return 0
                 else
-                    print_error "Fehler beim Entpacken von $archive (TAR.GZ) - möglicherweise Pfad zu lang oder Datei beschädigt"
+                    tar_exit=$?
+                    if [ $tar_exit -eq 1 ]; then
+                        # Parse Fehlerausgabe
+                        local skipped_count=$(grep -c "Can't create" "$tar_errors" 2>/dev/null || echo 0)
+                        TOTAL_SKIPPED_FILES=$((TOTAL_SKIPPED_FILES + skipped_count))
+                        
+                        print_warning "Archiv teilweise entpackt (Fallback): $(basename "$archive")"
+                        print_info "$skipped_count Datei(en) übersprungen"
+                        
+                        # Speichere Details
+                        if [ -n "$SKIPPED_FILES_LOG" ]; then
+                            echo "" >> "$SKIPPED_FILES_LOG"
+                            echo "=== Archiv: $(basename "$archive") (Fallback) ===" >> "$SKIPPED_FILES_LOG"
+                            grep "Can't create" "$tar_errors" | sed "s/.*Can't create '//" | sed "s/': No such.*//" >> "$SKIPPED_FILES_LOG" 2>/dev/null
+                        fi
+                        
+                        rm -f "$tar_errors"
+                        mv "$temp_extract_dir"/* "$target_dir/" 2>/dev/null
+                        mv "$temp_extract_dir"/.[!.]* "$target_dir/" 2>/dev/null
+                        rmdir "$temp_extract_dir"
+                        return 0
+                    fi
+                    rm -rf "$temp_extract_dir"
+                    rm -f "$tar_errors"
+                    print_error "Fehler beim Entpacken von $archive (TAR.GZ) - Exit Code: $tar_exit"
                     return 1
                 fi
             fi
             ;;
         tar.bz2)
-            # FIX: Verwende absoluten Pfad und wechsle ins Zielverzeichnis
+            # FIX: Extrahiere in temporäres Verzeichnis mit kurzem Namen
+            local temp_extract_dir="/tmp/arc_$$_$RANDOM"
+            mkdir -p "$temp_extract_dir"
+            
             local abs_archive
             abs_archive="$(cd "$(dirname "$archive")" && pwd)/$(basename "$archive")"
-            if (cd "$target_dir" && tar -xjf "$abs_archive" 2>&1); then
+            
+            if (cd "$temp_extract_dir" && tar -xjf "$abs_archive" 2>&1); then
+                mv "$temp_extract_dir"/* "$target_dir/" 2>/dev/null
+                mv "$temp_extract_dir"/.[!.]* "$target_dir/" 2>/dev/null
+                rmdir "$temp_extract_dir"
                 return 0
             else
+                rm -rf "$temp_extract_dir"
                 print_error "Fehler beim Entpacken von $archive (TAR.BZ2)"
                 return 1
             fi
             ;;
         tar)
-            # FIX: Verwende absoluten Pfad und wechsle ins Zielverzeichnis
+            # FIX: Extrahiere in temporäres Verzeichnis mit kurzem Namen
+            local temp_extract_dir="/tmp/arc_$$_$RANDOM"
+            mkdir -p "$temp_extract_dir"
+            
             local abs_archive
             abs_archive="$(cd "$(dirname "$archive")" && pwd)/$(basename "$archive")"
-            if (cd "$target_dir" && tar -xf "$abs_archive" 2>&1); then
+            
+            if (cd "$temp_extract_dir" && tar -xf "$abs_archive" 2>&1); then
+                mv "$temp_extract_dir"/* "$target_dir/" 2>/dev/null
+                mv "$temp_extract_dir"/.[!.]* "$target_dir/" 2>/dev/null
+                rmdir "$temp_extract_dir"
                 return 0
             else
+                rm -rf "$temp_extract_dir"
                 print_error "Fehler beim Entpacken von $archive (TAR)"
                 return 1
             fi
@@ -685,6 +770,11 @@ process_single_archive() {
     TEMP_HARDLINK_FILE="$temp_hardlink_file"
     TEMP_SPECIAL_FILE="$temp_special_file"
     
+    # Erstelle Log-Datei für übersprungene Dateien
+    SKIPPED_FILES_LOG="$output_dir/.skipped_files.log"
+    TOTAL_SKIPPED_FILES=0
+    touch "$SKIPPED_FILES_LOG"
+    
     # Entpacke Hauptarchiv
     print_info "Starte Entpacken des Hauptarchivs..."
     if ! extract_archive "$archive_file" "$output_dir" "$archive_type"; then
@@ -708,6 +798,13 @@ process_single_archive() {
     
     # Cleanup temporäre Dateien
     rm -f "$temp_size_file" "$temp_ext_file" "$temp_binary_file" "$temp_symlink_file" "$temp_hardlink_file" "$temp_special_file"
+    
+    # Zeige Zusammenfassung übersprungener Dateien
+    if [ $TOTAL_SKIPPED_FILES -gt 0 ]; then
+        echo ""
+        print_warning "Insgesamt $TOTAL_SKIPPED_FILES Datei(en) wegen zu langer Pfade übersprungen"
+        print_info "Details siehe: $output_dir/.skipped_files.log"
+    fi
     
     print_success "Archiv analysiert: $archive_file"
     print_success "Report: $output_dir/analysis_report.txt"
