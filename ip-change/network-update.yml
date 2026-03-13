@@ -66,41 +66,62 @@
         skipinitialspace: yes
       register: csv_data
 
-    - name: Zeige gelesene CSV-Daten (Debug)
+    - name: Debug - Zeige Anzahl CSV-Einträge
       debug:
-        var: csv_data
-        verbosity: 1
+        msg: "CSV-Datei enthält {{ csv_data.list | length }} Einträge"
 
-    - name: Hole aktuellen Hostname (short)
+    - name: Debug - Zeige alle Hostnamen aus CSV
+      debug:
+        msg: "{{ csv_data.list | map(attribute='Hostname-alt') | list }}"
+
+    - name: Hole aktuellen Hostname (short) vom Zielsystem
       command: hostname -s
       register: current_hostname_short
       changed_when: false
 
-    - name: Hole FQDN
+    - name: Hole FQDN vom Zielsystem
       command: hostname -f
       register: current_hostname_fqdn
       changed_when: false
       failed_when: false
 
-    - name: Setze aktuellen Hostname
+    - name: Debug - Zeige rohe Hostname-Ausgaben
+      debug:
+        msg:
+          - "hostname -s output: '{{ current_hostname_short.stdout }}'"
+          - "hostname -f output: '{{ current_hostname_fqdn.stdout }}'"
+          - "ansible_hostname: '{{ ansible_hostname }}'"
+          - "ansible_fqdn: '{{ ansible_fqdn }}'"
+
+    - name: Setze aktuellen Hostname (mit Fallback auf Ansible Facts)
       set_fact:
-        current_hostname_short_name: "{{ current_hostname_short.stdout }}"
-        current_hostname_fqdn_name: "{{ current_hostname_fqdn.stdout }}"
+        current_hostname_short_name: "{{ current_hostname_short.stdout | default(ansible_hostname, true) }}"
+        current_hostname_fqdn_name: "{{ current_hostname_fqdn.stdout | default(ansible_fqdn, true) }}"
 
     - name: Debug - Zeige aktuelle Hostnamen
       debug:
         msg:
+          - "=== HOSTNAME IDENTIFIKATION ==="
           - "Hostname (short): {{ current_hostname_short_name }}"
           - "Hostname (FQDN): {{ current_hostname_fqdn_name }}"
 
-    - name: Suche passenden Eintrag in CSV (FQDN)
+    - name: Suche passenden Eintrag in CSV (FQDN exakt)
       set_fact:
-        host_config: "{{ csv_data.list | selectattr('Hostname-alt', 'equalto', current_hostname_fqdn_name) | first | default({}) }}"
+        host_config: "{{ csv_data.list | selectattr('Hostname-alt', 'equalto', current_hostname_fqdn_name) | list | first | default({}) }}"
 
-    - name: Suche passenden Eintrag in CSV (short name) falls FQDN nicht gefunden
+    - name: Debug - Ergebnis FQDN-Suche
+      debug:
+        msg: "FQDN-Suche: {{ 'Gefunden' if host_config != {} else 'Nicht gefunden' }}"
+
+    - name: Suche passenden Eintrag in CSV (short name mit Regex) falls FQDN nicht gefunden
       set_fact:
-        host_config: "{{ csv_data.list | selectattr('Hostname-alt', 'search', '^' + current_hostname_short_name + '\\.') | first | default({}) }}"
+        host_config: "{{ csv_data.list | selectattr('Hostname-alt', 'search', '^' + current_hostname_short_name + '\\.') | list | first | default({}) }}"
       when: host_config == {}
+
+    - name: Debug - Ergebnis Short-Name-Suche
+      debug:
+        msg: "Short-Name-Suche: {{ 'Gefunden' if host_config != {} else 'Nicht gefunden' }}"
+      when: host_config != {}
 
     - name: Prüfe ob Host in CSV gefunden wurde
       fail:
@@ -108,19 +129,27 @@
           FEHLER: Hostname wurde nicht in der CSV-Datei gefunden!
           Hostname (short): {{ current_hostname_short_name }}
           Hostname (FQDN): {{ current_hostname_fqdn_name }}
-          Bitte prüfen Sie die CSV-Datei und den Hostnamen.
+          
+          Verfügbare Hostnamen in CSV:
+          {{ csv_data.list | map(attribute='Hostname-alt') | list | join('\n') }}
       when: host_config == {}
 
-    - name: Zeige gefundene Konfiguration
+    - name: Debug - Zeige ALLE identifizierten Felder
       debug:
         msg:
-          - "Gefundene Konfiguration für Host: {{ current_hostname }}"
-          - "Hostname alt: {{ host_config['Hostname-alt'] }}"
-          - "Hostname neu: {{ host_config['Hostname-neu'] }}"
-          - "IP alt (9.x): {{ host_config['Ip-alt'] }}"
-          - "IP neu (9.x): {{ host_config['ip-neu'] }}"
-          - "IP alt (10.x): {{ host_config['10-alt'] }}"
-          - "IP neu (10.x): {{ host_config['10-neu'] }}"
+          - "=== IDENTIFIZIERTE KONFIGURATION ==="
+          - "Aktueller Hostname: {{ current_hostname_fqdn_name }}"
+          - ""
+          - "Gefundener CSV-Eintrag:"
+          - "  Hostname-alt: {{ host_config['Hostname-alt'] | default('NICHT GEFUNDEN') }}"
+          - "  Hostname-neu: {{ host_config['Hostname-neu'] | default('NICHT GEFUNDEN') }}"
+          - "  Ip-alt (9.x): {{ host_config['Ip-alt'] | default('NICHT GEFUNDEN') }}"
+          - "  ip-neu (9.x): {{ host_config['ip-neu'] | default('NICHT GEFUNDEN') }}"
+          - "  10-alt (10.x): {{ host_config['10-alt'] | default('NICHT GEFUNDEN') }}"
+          - "  10-neu (10.x): {{ host_config['10-neu'] | default('NICHT GEFUNDEN') }}"
+          - ""
+          - "Vollständiger Eintrag:"
+          - "{{ host_config }}"
 
     #==========================================================================
     # Identifiziere Netzwerkschnittstellen
