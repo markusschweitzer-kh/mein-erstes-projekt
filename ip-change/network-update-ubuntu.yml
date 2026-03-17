@@ -1,29 +1,33 @@
 ---
 #==============================================================================
-# Ansible Playbook: Red Hat / Oracle Linux Netzwerkkonfiguration Update
+# Ansible Playbook: Ubuntu Linux Netzwerkkonfiguration Update
 #==============================================================================
 # Dieses Playbook aktualisiert Hostname und Netzwerkkonfiguration basierend
 # auf der ip-change.csv Datei.
 #
 # Kompatibel mit:
-#   - Red Hat Enterprise Linux 7/8/9
-#   - Oracle Linux 7/8/9
+#   - Ubuntu 24.04 LTS (Noble Numbat)
+#   - Ubuntu 22.04 LTS (Jammy Jellyfish)
+#   - Ubuntu 20.04 LTS (Focal Fossa)
+#   - Ubuntu 18.04 LTS (Bionic Beaver)
+#
+# Verwendet Netplan für Netzwerkkonfiguration
 #
 # Verwendung:
 #   # Lokal ausführen:
-#   ansible-playbook -i localhost, -c local network-update.yml
+#   ansible-playbook -i localhost, -c local network-update-ubuntu.yml
 #
 #   # Remote ausführen:
-#   ansible-playbook -i inventory.ini network-update.yml
+#   ansible-playbook -i inventory.ini network-update-ubuntu.yml
 #
 #   # Mit spezifischer CSV-Datei:
-#   ansible-playbook network-update.yml -e "csv_file=/path/to/ip-change.csv"
+#   ansible-playbook network-update-ubuntu.yml -e "csv_file=/path/to/ip-change.csv"
 #
 #   # Dry-Run (Check Mode):
-#   ansible-playbook network-update.yml --check --diff
+#   ansible-playbook network-update-ubuntu.yml --check --diff
 #==============================================================================
 
-- name: Update Red Hat / Oracle Linux Network Configuration
+- name: Update Ubuntu Linux Network Configuration
   hosts: all
   become: yes
   gather_facts: yes
@@ -35,12 +39,22 @@
     new_gateway: "9.125.190.1"
     new_netmask: "255.255.255.128"
     new_prefix: "25"  # /25 = 255.255.255.128
+    netplan_config_file: "/etc/netplan/01-netcfg.yaml"
     
   tasks:
     #==========================================================================
     # Vorbereitungen und Validierung
     #==========================================================================
     
+    - name: Prüfe ob Ubuntu
+      fail:
+        msg: "Dieses Playbook ist nur für Ubuntu! Verwenden Sie network-update.yml für RHEL/Oracle Linux."
+      when: ansible_distribution != "Ubuntu"
+
+    - name: Prüfe Ubuntu Version
+      debug:
+        msg: "Ubuntu Version: {{ ansible_distribution_version }}"
+
     - name: Erstelle Backup- und Log-Verzeichnisse
       delegate_to: localhost
       become: no
@@ -185,7 +199,7 @@
       set_fact:
         interface_10x: "{{ item.split()[0] }}"
         current_ip_10x: "{{ item.split()[1].split('/')[0] }}"
-      when:
+      when: 
         - item.split()[1] | regex_search('^10\\.')
         - item.split()[1].split('/')[0] == host_config['10-alt']
       loop: "{{ interfaces_info }}"
@@ -194,7 +208,7 @@
       set_fact:
         interface_10x: "{{ item.split()[0] }}"
         current_ip_10x: "{{ item.split()[1].split('/')[0] }}"
-      when:
+      when: 
         - interface_10x is not defined
         - item.split()[1] | regex_search('^10\\.10\\.')
       loop: "{{ interfaces_info }}"
@@ -274,12 +288,31 @@
         flat: yes
       failed_when: false
 
-    - name: Backup Netzwerk-Konfigurationsdateien
+    - name: Prüfe ob Netplan-Konfiguration existiert
+      stat:
+        path: "{{ netplan_config_file }}"
+      register: netplan_stat
+
+    - name: Backup Netplan-Konfiguration
       fetch:
-        src: "/etc/sysconfig/network-scripts/ifcfg-{{ item }}"
-        dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}/ifcfg-{{ item }}"
+        src: "{{ netplan_config_file }}"
+        dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}/01-netcfg.yaml"
         flat: yes
-      loop: "{{ [interface_9x] + ([interface_10x] if interface_9x != interface_10x else []) }}"
+      when: netplan_stat.stat.exists
+      failed_when: false
+
+    - name: Backup alle Netplan-Dateien
+      shell: "tar czf /tmp/netplan_backup_{{ ansible_date_time.epoch }}.tar.gz /etc/netplan/"
+      args:
+        warn: false
+      changed_when: false
+      failed_when: false
+
+    - name: Hole Netplan-Backup
+      fetch:
+        src: "/tmp/netplan_backup_{{ ansible_date_time.epoch }}.tar.gz"
+        dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}/netplan_backup.tar.gz"
+        flat: yes
       failed_when: false
 
     #==========================================================================
@@ -307,79 +340,39 @@
         backup: yes
 
     #==========================================================================
-    # Netzwerkkonfiguration für 9.x Interface
+    # Netplan Konfiguration erstellen
     #==========================================================================
 
-    - name: Konfiguriere 9.x Interface ({{ interface_9x }})
+    - name: Erstelle Netplan-Konfiguration
       template:
-        src: ifcfg-template.j2
-        dest: "/etc/sysconfig/network-scripts/ifcfg-{{ interface_9x }}"
+        src: netplan-template.j2
+        dest: "{{ netplan_config_file }}"
         owner: root
         group: root
         mode: '0644'
         backup: yes
       vars:
-        device: "{{ interface_9x }}"
-        ipaddr: "{{ host_config['ip-neu'] }}"
-        netmask: "{{ new_netmask }}"
+        primary_interface: "{{ interface_9x }}"
+        primary_ip: "{{ host_config['ip-neu'] }}"
+        secondary_interface: "{{ interface_10x }}"
+        secondary_ip: "{{ host_config['10-neu'] }}"
         gateway: "{{ new_gateway }}"
-        is_primary: yes
+        prefix: "{{ new_prefix }}"
+        same_interface: "{{ interface_9x == interface_10x }}"
 
-    #==========================================================================
-    # Netzwerkkonfiguration für 10.x Interface
-    #==========================================================================
+    - name: Validiere Netplan-Konfiguration
+      command: netplan generate
+      register: netplan_generate
+      changed_when: false
+      failed_when: netplan_generate.rc != 0
 
-    - name: Konfiguriere 10.x IP (auf separatem Interface oder als Alias)
-      block:
-        - name: Konfiguriere 10.x auf separatem Interface
-          template:
-            src: ifcfg-template.j2
-            dest: "/etc/sysconfig/network-scripts/ifcfg-{{ interface_10x }}"
-            owner: root
-            group: root
-            mode: '0644'
-            backup: yes
-          vars:
-            device: "{{ interface_10x }}"
-            ipaddr: "{{ host_config['10-neu'] }}"
-            netmask: "{{ new_netmask }}"
-            gateway: ""
-            is_primary: no
-          when: interface_9x != interface_10x
-
-        - name: Konfiguriere 10.x als Alias auf demselben Interface
-          template:
-            src: ifcfg-template.j2
-            dest: "/etc/sysconfig/network-scripts/ifcfg-{{ interface_9x }}:0"
-            owner: root
-            group: root
-            mode: '0644'
-            backup: yes
-          vars:
-            device: "{{ interface_9x }}:0"
-            ipaddr: "{{ host_config['10-neu'] }}"
-            netmask: "{{ new_netmask }}"
-            gateway: ""
-            is_primary: no
-          when: interface_9x == interface_10x
+    - name: Zeige Netplan-Validierung
+      debug:
+        msg: "✓ Netplan-Konfiguration ist valide"
 
     #==========================================================================
     # Netzwerk neu starten
     #==========================================================================
-
-    - name: Prüfe NetworkManager Status
-      systemd:
-        name: NetworkManager
-      register: nm_status
-      failed_when: false
-
-    - name: Bestimme zu startende Interfaces
-      set_fact:
-        interfaces_to_restart: "{{ [interface_9x] + ([interface_10x] if interface_9x != interface_10x else [interface_9x + ':0']) }}"
-
-    - name: Debug - Zeige zu startende Interfaces
-      debug:
-        msg: "Starte folgende Interfaces neu: {{ interfaces_to_restart }}"
 
     - name: Warnung vor Netzwerk-Neustart
       debug:
@@ -389,29 +382,13 @@
           - "Das ist normal und erwartet."
           - "Warten Sie 30 Sekunden und verbinden Sie sich dann mit der neuen IP."
 
-    - name: Starte Netzwerkinterfaces neu (NetworkManager) - Asynchron
+    - name: Wende Netplan-Konfiguration an (Asynchron)
       shell: |
         sleep 2
-        nmcli connection reload
-        nmcli connection down "{{ item }}" || true
-        nmcli connection up "{{ item }}" || true
-      loop: "{{ interfaces_to_restart }}"
-      when: nm_status.status.ActiveState == "active"
+        netplan apply
       async: 30
       poll: 0
-      register: nm_restart
-      failed_when: false
-
-    - name: Starte Netzwerkinterfaces neu (network service) - Asynchron
-      shell: |
-        sleep 2
-        ifdown {{ item }} || true
-        ifup {{ item }} || true
-      loop: "{{ interfaces_to_restart }}"
-      when: nm_status.status.ActiveState != "active"
-      async: 30
-      poll: 0
-      register: network_restart
+      register: netplan_apply
       failed_when: false
 
     - name: Hinweis nach Netzwerk-Neustart
@@ -450,12 +427,13 @@
           - "  hostname -f"
           - "  ip addr show"
           - "  ping -c 3 {{ new_gateway }}"
+          - "  netplan status"
           - ""
           - "Backup-Verzeichnis:"
           - "  {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}"
           - ""
           - "Bei Problemen Rollback durchführen:"
-          - "  sudo ./rollback.sh"
+          - "  sudo ./rollback-ubuntu.sh"
           - "=========================================="
 
     #==========================================================================
@@ -468,10 +446,11 @@
       copy:
         content: |
           ================================================================================
-          Netzwerkkonfiguration Update Log
+          Ubuntu Netzwerkkonfiguration Update Log
           ================================================================================
           Datum: {{ ansible_date_time.iso8601 }}
           Host: {{ inventory_hostname }}
+          Ubuntu Version: {{ ansible_distribution_version }}
           
           ÄNDERUNGEN:
           -----------
@@ -483,17 +462,21 @@
             IP Alt: {{ host_config['Ip-alt'] }}
             IP Neu: {{ host_config['ip-neu'] }}
             Gateway: {{ new_gateway }}
-            Netmask: {{ new_netmask }}
+            Prefix: /{{ new_prefix }}
           
           Interface {{ interface_10x }} (10.x Netzwerk):
             IP Alt: {{ host_config['10-alt'] }}
             IP Neu: {{ host_config['10-neu'] }}
-            Netmask: {{ new_netmask }}
+            Prefix: /{{ new_prefix }}
+          
+          Netplan-Konfiguration:
+            Datei: {{ netplan_config_file }}
+            Beide IPs auf einem Interface: {{ 'Ja' if interface_9x == interface_10x else 'Nein' }}
           
           STATUS:
           -------
           Migration erfolgreich durchgeführt
-          Netzwerk-Neustart wurde initiiert
+          Netplan-Konfiguration angewendet
           
           VALIDIERUNG:
           ------------
@@ -501,15 +484,16 @@
             - hostname -f  (sollte {{ host_config['Hostname-neu'] }} sein)
             - ip addr show (sollte {{ host_config['ip-neu'] }} und {{ host_config['10-neu'] }} zeigen)
             - ping -c 3 {{ new_gateway }}
+            - netplan status
           
           Neue Verbindung:
             ssh root@{{ host_config['ip-neu'] }}
           
-          Backup-Verzeichnis:
+          Backup-Verzeichnis: 
             {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}
           
           Bei Problemen Rollback durchführen:
-            sudo ./rollback.sh
+            sudo ./rollback-ubuntu.sh
           ================================================================================
         dest: "{{ log_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}.log"
 

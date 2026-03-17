@@ -35,10 +35,12 @@ pip3 install ansible
 ```
 
 ### Auf den Ziel-VMs:
-- Red Hat Enterprise Linux 7/8/9
+- Red Hat Enterprise Linux 7/8/9 oder Oracle Linux 7/8/9
 - Python 3.x
 - Root-Zugriff oder sudo-Rechte
 - SSH-Zugriff (für Remote-Ausführung)
+
+**Hinweis:** Oracle Linux ist vollständig kompatibel! Siehe [`ORACLE_LINUX_KOMPATIBILITAET.md`](ORACLE_LINUX_KOMPATIBILITAET.md:1) für Details.
 
 ## 🚀 Installation
 

@@ -4,25 +4,47 @@
 
 ```
 ip-change/
-├── ip-change.csv              # CSV-Datei mit IP-Änderungsdaten
-├── ip-change.csv.backup       # Backup der Original-CSV
-├── network-update.yml         # Hauptplaybook für Netzwerk-Updates
-├── ifcfg-template.j2          # Jinja2-Template für Netzwerk-Interfaces
-├── inventory.ini              # Ansible Inventory-Beispiel
-├── rollback.sh                # Rollback-Script für Wiederherstellung
-├── validate-csv.sh            # CSV-Validierungs-Script
-├── fix-csv.sh                 # CSV-Bereinigungsscript
-├── README.md                  # Ausführliche Dokumentation
-├── SCHNELLSTART.md            # Schnellstart-Anleitung
-├── PROJEKT_UEBERSICHT.md      # Diese Datei
-├── backups/                   # Backup-Verzeichnis (wird erstellt)
-└── logs/                      # Log-Verzeichnis (wird erstellt)
+├── ip-change.csv                      # CSV-Datei mit IP-Änderungsdaten
+├── ip-change.csv.backup               # Backup der Original-CSV
+│
+├── network-update.yml                 # RHEL/Oracle Linux Playbook
+├── network-update-ubuntu.yml          # Ubuntu Playbook (NEU)
+│
+├── ifcfg-template.j2                  # Template für RHEL/Oracle Linux
+├── netplan-template.j2                # Template für Ubuntu (NEU)
+│
+├── inventory.ini                      # Ansible Inventory-Beispiel
+│
+├── rollback.sh                        # Rollback für RHEL/Oracle Linux
+├── rollback-ubuntu.sh                 # Rollback für Ubuntu (NEU)
+│
+├── validate-csv.sh                    # CSV-Validierungs-Script
+├── fix-csv.sh                         # CSV-Bereinigungsscript
+│
+├── README.md                          # Dokumentation RHEL/Oracle Linux
+├── README_UBUNTU.md                   # Dokumentation Ubuntu (NEU)
+├── SCHNELLSTART.md                    # Schnellstart-Anleitung
+├── TEST_ANLEITUNG.md                  # Test-Anleitung
+├── PROJEKT_UEBERSICHT.md              # Diese Datei
+├── ORACLE_LINUX_KOMPATIBILITAET.md    # Oracle Linux Details
+├── UBUNTU_KOMPATIBILITAET.md          # Ubuntu Details (NEU)
+│
+├── backups/                           # Backup-Verzeichnis (wird erstellt)
+└── logs/                              # Log-Verzeichnis (wird erstellt)
 ```
 
 ## 🎯 Hauptkomponenten
 
-### 1. Ansible Playbook ([`network-update.yml`](network-update.yml:1))
-**Zweck:** Automatisiert die Netzwerkkonfiguration auf Red Hat Linux VMs
+### Unterstützte Betriebssysteme:
+
+| OS | Playbook | Template | Rollback |
+|----|----------|----------|----------|
+| **RHEL 7/8/9** | [`network-update.yml`](network-update.yml:1) | [`ifcfg-template.j2`](ifcfg-template.j2:1) | [`rollback.sh`](rollback.sh:1) |
+| **Oracle Linux 7/8/9** | [`network-update.yml`](network-update.yml:1) | [`ifcfg-template.j2`](ifcfg-template.j2:1) | [`rollback.sh`](rollback.sh:1) |
+| **Ubuntu 18.04-24.04** | [`network-update-ubuntu.yml`](network-update-ubuntu.yml:1) | [`netplan-template.j2`](netplan-template.j2:1) | [`rollback-ubuntu.sh`](rollback-ubuntu.sh:1) |
+
+### 1. Ansible Playbook RHEL/Oracle Linux ([`network-update.yml`](network-update.yml:1))
+**Zweck:** Automatisiert die Netzwerkkonfiguration auf Red Hat/Oracle Linux VMs
 
 **Features:**
 - ✅ Liest CSV-Datei ein und identifiziert Host
@@ -43,10 +65,35 @@ ansible-playbook -i localhost, -c local network-update.yml --check
 ansible-playbook -i inventory.ini network-update.yml
 ```
 
-### 2. Netzwerk-Template ([`ifcfg-template.j2`](ifcfg-template.j2:1))
+### 1b. Ansible Playbook Ubuntu ([`network-update-ubuntu.yml`](network-update-ubuntu.yml:1))
+**Zweck:** Automatisiert die Netzwerkkonfiguration auf Ubuntu Linux VMs
+
+**Features:**
+- ✅ Netplan-Unterstützung (Ubuntu 18.04+)
+- ✅ YAML-basierte Konfiguration
+- ✅ Netplan-Validierung vor Anwendung
+- ✅ Unterstützt Ubuntu 18.04, 20.04, 22.04, 24.04 LTS
+
+**Verwendung:**
+```bash
+# Lokal
+ansible-playbook -i localhost, -c local network-update-ubuntu.yml --check
+
+# Remote
+ansible-playbook -i inventory.ini network-update-ubuntu.yml
+```
+
+### 2. Netzwerk-Templates
+
+#### RHEL/Oracle Linux Template ([`ifcfg-template.j2`](ifcfg-template.j2:1))
 **Zweck:** Jinja2-Template für Red Hat Netzwerk-Interface-Konfiguration
 
 **Generiert:** `/etc/sysconfig/network-scripts/ifcfg-*` Dateien
+
+#### Ubuntu Template ([`netplan-template.j2`](netplan-template.j2:1))
+**Zweck:** Jinja2-Template für Ubuntu Netplan-Konfiguration
+
+**Generiert:** `/etc/netplan/01-netcfg.yaml` Datei
 
 ### 3. Inventory-Datei ([`inventory.ini`](inventory.ini:1))
 **Zweck:** Ansible Inventory für Remote-Ausführung
@@ -57,14 +104,16 @@ ansible-playbook -i inventory.ini network-update.yml
 ihr-host.domain.com ansible_host=9.155.64.xxx ansible_user=root
 ```
 
-### 4. Rollback-Script ([`rollback.sh`](rollback.sh:1))
+### 4. Rollback-Scripts
+
+#### RHEL/Oracle Linux ([`rollback.sh`](rollback.sh:1))
 **Zweck:** Stellt Konfiguration aus Backup wieder her
 
 **Features:**
 - ✅ Listet verfügbare Backups
 - ✅ Verwendet neuestes Backup automatisch
 - ✅ Stellt Hostname und Netzwerk-Interfaces wieder her
-- ✅ Startet Netzwerk neu
+- ✅ Startet Netzwerk neu mit NetworkManager
 
 **Verwendung:**
 ```bash
@@ -76,6 +125,33 @@ sudo ./rollback.sh hostname_20260313_083000
 
 # Backups auflisten
 ./rollback.sh --list
+```
+
+#### Ubuntu ([`rollback-ubuntu.sh`](rollback-ubuntu.sh:1))
+**Zweck:** Stellt Ubuntu Netplan-Konfiguration aus Backup wieder her
+
+**Features:**
+- ✅ Listet verfügbare Backups
+- ✅ Verwendet neuestes Backup automatisch
+- ✅ Stellt Hostname und Netzwerk-Interfaces wieder her
+- ✅ Startet Netzwerk neu
+
+**Features:**
+- ✅ Listet verfügbare Backups
+- ✅ Stellt Netplan-Konfiguration wieder her
+- ✅ Verwendet `netplan try` für sicheren Rollback
+- ✅ 120 Sekunden Timeout mit automatischem Rollback
+
+**Verwendung:**
+```bash
+# Neuestes Backup verwenden
+sudo ./rollback-ubuntu.sh
+
+# Spezifisches Backup
+sudo ./rollback-ubuntu.sh hostname_20260313_083000
+
+# Backups auflisten
+./rollback-ubuntu.sh --list
 ```
 
 ### 5. CSV-Validierung ([`validate-csv.sh`](validate-csv.sh:1))
