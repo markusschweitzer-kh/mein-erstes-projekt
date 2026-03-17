@@ -1,0 +1,24 @@
+# {{ ansible_managed }}
+# SLES Routing Configuration
+# Generated: {{ ansible_date_time.iso8601 }}
+# Hostname: {{ new_hostname }}
+# Interface: {{ interface_name }}
+#
+# Format: destination gateway netmask interface [type] [options]
+#
+# Beispiele:
+#   default 192.168.1.1 - eth0
+#   10.0.0.0 0.0.0.0 255.255.255.0 eth0
+#   192.168.2.0/24 192.168.1.1 - eth0
+
+# Default Gateway (primäres Netzwerk)
+default {{ gateway }} - {{ interface_name }}
+
+{% if secondary_ip %}
+# Lokales Netzwerk für sekundäre IP (10.x)
+10.10.64.0 0.0.0.0 255.255.255.0 {{ interface_name }}
+{% endif %}
+
+# Zusätzliche statische Routen können hier hinzugefügt werden
+# Beispiel:
+# 172.16.0.0 192.168.1.254 255.255.0.0 eth0

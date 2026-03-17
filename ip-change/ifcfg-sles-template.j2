@@ -1,0 +1,29 @@
+# {{ ansible_managed }}
+# SLES Network Interface Configuration
+# Generated: {{ ansible_date_time.iso8601 }}
+# Hostname: {{ new_hostname }}
+# Interface: {{ interface_name }}
+
+# Boot Protocol und Start-Modus
+BOOTPROTO='static'
+STARTMODE='auto'
+NAME='Primary Network Interface'
+
+# Primäre IP-Adresse (neue 9.x IP)
+IPADDR='{{ primary_ip }}/{{ prefix }}'
+
+{% if secondary_ip %}
+# Sekundäre IP-Adresse (10.x IP)
+LABEL_0='secondary'
+IPADDR_0='{{ secondary_ip }}/24'
+{% endif %}
+
+# MTU (optional)
+# MTU='1500'
+
+# VLAN (optional)
+# VLAN_ID=''
+
+# Bonding (optional)
+# BONDING_MASTER='yes'
+# BONDING_SLAVE_0=''

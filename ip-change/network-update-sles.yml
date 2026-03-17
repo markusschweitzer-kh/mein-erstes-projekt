@@ -1,0 +1,485 @@
+---
+#==============================================================================
+# Ansible Playbook: SLES (SUSE Linux Enterprise Server) Netzwerkkonfiguration
+#==============================================================================
+# Dieses Playbook aktualisiert Hostname und Netzwerkkonfiguration basierend
+# auf der ip-change.csv Datei.
+#
+# Kompatibel mit:
+#   - SLES 15 SP5 (Support bis 2031)
+#   - SLES 15 SP4 (Support bis 2027)
+#   - SLES 15 SP3 (Support bis 2025)
+#   - SLES 12 SP5 (Support bis 2024)
+#
+# Verwendet Wicked für Netzwerkkonfiguration
+#
+# Verwendung:
+#   # Lokal ausführen:
+#   ansible-playbook -i localhost, -c local network-update-sles.yml
+#
+#   # Remote ausführen:
+#   ansible-playbook -i inventory.ini network-update-sles.yml
+#
+#   # Mit spezifischer CSV-Datei:
+#   ansible-playbook network-update-sles.yml -e "csv_file=/path/to/ip-change.csv"
+#
+#   # Dry-Run (Check Mode):
+#   ansible-playbook network-update-sles.yml --check --diff
+#==============================================================================
+
+- name: Update SLES Network Configuration
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    csv_file: "{{ playbook_dir }}/ip-change.csv"
+    backup_dir: "{{ playbook_dir }}/backups"
+    log_dir: "{{ playbook_dir }}/logs"
+    new_gateway: "9.125.190.1"
+    new_netmask: "255.255.255.128"
+    new_prefix: "25"  # /25 = 255.255.255.128
+    network_config_dir: "/etc/sysconfig/network"
+    
+  tasks:
+    #==========================================================================
+    # Vorbereitungen und Validierung
+    #==========================================================================
+    
+    - name: Erstelle Backup- und Log-Verzeichnisse
+      delegate_to: localhost
+      become: no
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ backup_dir }}"
+        - "{{ log_dir }}"
+      run_once: true
+    
+    - name: Prüfe ob SLES
+      fail:
+        msg: "Dieses Playbook ist nur für SLES! Erkanntes System: {{ ansible_distribution }}"
+      when: ansible_distribution != "SLES"
+    
+    - name: Prüfe SLES Version
+      fail:
+        msg: "Dieses Playbook benötigt SLES 12 oder höher. Erkannte Version: {{ ansible_distribution_version }}"
+      when: ansible_distribution_major_version | int < 12
+    
+    - name: Zeige System-Informationen
+      debug:
+        msg:
+          - "Distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Kernel: {{ ansible_kernel }}"
+          - "Hostname: {{ ansible_hostname }}"
+          - "FQDN: {{ ansible_fqdn }}"
+    
+    - name: Prüfe ob CSV-Datei existiert
+      delegate_to: localhost
+      become: no
+      stat:
+        path: "{{ csv_file }}"
+      register: csv_stat
+      run_once: true
+    
+    - name: Fehler wenn CSV-Datei nicht existiert
+      fail:
+        msg: "CSV-Datei nicht gefunden: {{ csv_file }}"
+      when: not csv_stat.stat.exists
+      run_once: true
+    
+    - name: Lese CSV-Datei
+      delegate_to: localhost
+      become: no
+      read_csv:
+        path: "{{ csv_file }}"
+        delimiter: ';'
+        key: Hostname-alt
+      register: csv_data
+      run_once: true
+    
+    - name: Zeige CSV-Daten (Debug)
+      debug:
+        var: csv_data
+        verbosity: 1
+    
+    #==========================================================================
+    # Hostname-Identifikation
+    #==========================================================================
+    
+    - name: Identifiziere aktuellen Hostname
+      set_fact:
+        current_hostname: "{{ ansible_fqdn if ansible_fqdn != 'localhost' else ansible_hostname }}"
+    
+    - name: Suche Host in CSV-Daten
+      set_fact:
+        host_data: "{{ csv_data.dict[current_hostname] | default(none) }}"
+    
+    - name: Fallback - Suche mit ansible_hostname
+      set_fact:
+        host_data: "{{ csv_data.dict[ansible_hostname] | default(none) }}"
+      when: host_data is none
+    
+    - name: Fallback - Suche mit Kurzname
+      set_fact:
+        host_data: "{{ csv_data.dict[ansible_hostname.split('.')[0]] | default(none) }}"
+      when: host_data is none
+    
+    - name: Fehler wenn Host nicht in CSV gefunden
+      fail:
+        msg: |
+          Host '{{ current_hostname }}' nicht in CSV-Datei gefunden!
+          Verfügbare Hosts: {{ csv_data.dict.keys() | list }}
+      when: host_data is none
+    
+    - name: Zeige gefundene Host-Daten
+      debug:
+        msg:
+          - "Alter Hostname: {{ host_data['Hostname-alt'] }}"
+          - "Neuer Hostname: {{ host_data['Hostname-neu'] }}"
+          - "Alte IP: {{ host_data['Ip-alt'] }}"
+          - "Neue IP: {{ host_data['ip-neu'] }}"
+          - "Alte 10.x IP: {{ host_data['10-alt'] }}"
+          - "Neue 10.x IP: {{ host_data['10-neu'] }}"
+    
+    #==========================================================================
+    # Netzwerk-Interface Erkennung
+    #==========================================================================
+    
+    - name: Sammle Netzwerk-Informationen
+      setup:
+        gather_subset:
+          - network
+      check_mode: no
+    
+    - name: Finde primäres Interface mit alter IP
+      set_fact:
+        primary_interface: "{{ item }}"
+      when: 
+        - hostvars[inventory_hostname]['ansible_' + item] is defined
+        - hostvars[inventory_hostname]['ansible_' + item].ipv4 is defined
+        - hostvars[inventory_hostname]['ansible_' + item].ipv4.address == host_data['Ip-alt']
+      loop: "{{ ansible_interfaces }}"
+    
+    - name: Fallback - Finde Interface mit 10.x IP
+      set_fact:
+        primary_interface: "{{ item.split(':')[0] }}"
+      when:
+        - primary_interface is not defined
+        - hostvars[inventory_hostname]['ansible_' + item.replace(':', '_')] is defined
+        - hostvars[inventory_hostname]['ansible_' + item.replace(':', '_')].ipv4 is defined
+        - hostvars[inventory_hostname]['ansible_' + item.replace(':', '_')].ipv4.address == host_data['10-alt']
+      loop: "{{ ansible_interfaces }}"
+    
+    - name: Fallback - Verwende erstes nicht-loopback Interface
+      set_fact:
+        primary_interface: "{{ ansible_interfaces | reject('match', '^lo$') | first }}"
+      when: primary_interface is not defined
+    
+    - name: Zeige erkanntes Interface
+      debug:
+        msg: "Primäres Interface: {{ primary_interface }}"
+    
+    - name: Prüfe ob Interface existiert
+      fail:
+        msg: "Interface {{ primary_interface }} nicht gefunden!"
+      when: primary_interface not in ansible_interfaces
+    
+    #==========================================================================
+    # Backup der aktuellen Konfiguration
+    #==========================================================================
+    
+    - name: Erstelle Backup-Verzeichnis für diesen Host
+      delegate_to: localhost
+      become: no
+      file:
+        path: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Backup - Hostname
+      command: hostname
+      register: old_hostname
+      changed_when: false
+      check_mode: no
+    
+    - name: Backup - /etc/hostname
+      slurp:
+        src: /etc/hostname
+      register: hostname_file
+      ignore_errors: yes
+      check_mode: no
+    
+    - name: Backup - Interface-Konfiguration
+      slurp:
+        src: "{{ network_config_dir }}/ifcfg-{{ primary_interface }}"
+      register: ifcfg_backup
+      ignore_errors: yes
+      check_mode: no
+    
+    - name: Backup - Routing-Konfiguration
+      slurp:
+        src: "{{ network_config_dir }}/routes"
+      register: routes_backup
+      ignore_errors: yes
+      check_mode: no
+    
+    - name: Backup - DNS-Konfiguration
+      slurp:
+        src: "{{ network_config_dir }}/config"
+      register: config_backup
+      ignore_errors: yes
+      check_mode: no
+    
+    - name: Speichere Backups lokal
+      delegate_to: localhost
+      become: no
+      copy:
+        content: "{{ item.content | b64decode }}"
+        dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}/{{ item.name }}"
+        mode: '0644'
+      loop:
+        - { name: 'hostname', content: "{{ hostname_file.content }}" }
+        - { name: 'ifcfg-{{ primary_interface }}', content: "{{ ifcfg_backup.content | default('') }}" }
+        - { name: 'routes', content: "{{ routes_backup.content | default('') }}" }
+        - { name: 'config', content: "{{ config_backup.content | default('') }}" }
+      when: item.content != ''
+      ignore_errors: yes
+    
+    - name: Speichere Backup-Metadaten
+      delegate_to: localhost
+      become: no
+      copy:
+        content: |
+          Backup erstellt: {{ ansible_date_time.iso8601 }}
+          Host: {{ inventory_hostname }}
+          Alter Hostname: {{ old_hostname.stdout }}
+          Neuer Hostname: {{ host_data['Hostname-neu'] }}
+          Alte IP: {{ host_data['Ip-alt'] }}
+          Neue IP: {{ host_data['ip-neu'] }}
+          Interface: {{ primary_interface }}
+        dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}/backup_info.txt"
+        mode: '0644'
+    
+    #==========================================================================
+    # Hostname-Änderung
+    #==========================================================================
+    
+    - name: Setze neuen Hostname (temporär)
+      hostname:
+        name: "{{ host_data['Hostname-neu'] }}"
+    
+    - name: Aktualisiere /etc/hostname
+      copy:
+        content: "{{ host_data['Hostname-neu'] }}\n"
+        dest: /etc/hostname
+        owner: root
+        group: root
+        mode: '0644'
+    
+    - name: Aktualisiere /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1\s+'
+        line: "127.0.1.1 {{ host_data['Hostname-neu'] }} {{ host_data['Hostname-neu'].split('.')[0] }}"
+        create: yes
+    
+    - name: Füge neue IP zu /etc/hosts hinzu
+      lineinfile:
+        path: /etc/hosts
+        regexp: "^{{ host_data['ip-neu'] }}\\s+"
+        line: "{{ host_data['ip-neu'] }} {{ host_data['Hostname-neu'] }} {{ host_data['Hostname-neu'].split('.')[0] }}"
+        create: yes
+    
+    #==========================================================================
+    # Netzwerk-Konfiguration
+    #==========================================================================
+    
+    - name: Erstelle Interface-Konfiguration aus Template
+      template:
+        src: ifcfg-sles-template.j2
+        dest: "{{ network_config_dir }}/ifcfg-{{ primary_interface }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      vars:
+        interface_name: "{{ primary_interface }}"
+        primary_ip: "{{ host_data['ip-neu'] }}"
+        secondary_ip: "{{ host_data['10-neu'] }}"
+        prefix: "{{ new_prefix }}"
+        new_hostname: "{{ host_data['Hostname-neu'] }}"
+    
+    - name: Erstelle Routing-Konfiguration aus Template
+      template:
+        src: routes-sles-template.j2
+        dest: "{{ network_config_dir }}/routes"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      vars:
+        interface_name: "{{ primary_interface }}"
+        gateway: "{{ new_gateway }}"
+        secondary_ip: "{{ host_data['10-neu'] }}"
+        new_hostname: "{{ host_data['Hostname-neu'] }}"
+    
+    - name: Konfiguriere DNS-Server
+      lineinfile:
+        path: "{{ network_config_dir }}/config"
+        regexp: '^NETCONFIG_DNS_STATIC_SERVERS='
+        line: 'NETCONFIG_DNS_STATIC_SERVERS="9.0.0.1 9.0.0.2"'
+        create: yes
+    
+    - name: Konfiguriere DNS-Suchliste (leer)
+      lineinfile:
+        path: "{{ network_config_dir }}/config"
+        regexp: '^NETCONFIG_DNS_STATIC_SEARCHLIST='
+        line: 'NETCONFIG_DNS_STATIC_SEARCHLIST=""'
+        create: yes
+    
+    #==========================================================================
+    # Netzwerk-Neustart (Asynchron)
+    #==========================================================================
+    
+    - name: Zeige Warnung vor Netzwerk-Neustart
+      debug:
+        msg:
+          - "ACHTUNG: Netzwerk wird jetzt neu gestartet!"
+          - "SSH-Verbindung könnte kurzzeitig unterbrochen werden."
+          - "Neue IP-Adresse: {{ host_data['ip-neu'] }}"
+    
+    - name: Starte Wicked-Netzwerk neu (asynchron)
+      shell: |
+        # Warte kurz, dann starte Netzwerk neu
+        sleep 2
+        wicked ifreload all
+      async: 45
+      poll: 0
+      register: network_restart
+    
+    - name: Warte auf Netzwerk-Neustart
+      pause:
+        seconds: 10
+    
+    - name: Prüfe Netzwerk-Status
+      command: wicked ifstatus {{ primary_interface }}
+      register: wicked_status
+      changed_when: false
+      ignore_errors: yes
+    
+    - name: Zeige Wicked-Status
+      debug:
+        var: wicked_status.stdout_lines
+      when: wicked_status is succeeded
+    
+    #==========================================================================
+    # Validierung
+    #==========================================================================
+    
+    - name: Sammle neue Netzwerk-Informationen
+      setup:
+        gather_subset:
+          - network
+      check_mode: no
+    
+    - name: Validiere neue IP-Adresse
+      assert:
+        that:
+          - hostvars[inventory_hostname]['ansible_' + primary_interface].ipv4.address == host_data['ip-neu']
+        fail_msg: "Neue IP {{ host_data['ip-neu'] }} wurde nicht korrekt konfiguriert!"
+        success_msg: "Neue IP {{ host_data['ip-neu'] }} erfolgreich konfiguriert"
+      ignore_errors: yes
+    
+    - name: Validiere Hostname
+      assert:
+        that:
+          - ansible_hostname == host_data['Hostname-neu'].split('.')[0] or ansible_fqdn == host_data['Hostname-neu']
+        fail_msg: "Neuer Hostname wurde nicht korrekt gesetzt!"
+        success_msg: "Neuer Hostname erfolgreich gesetzt"
+      ignore_errors: yes
+    
+    - name: Teste Gateway-Erreichbarkeit
+      command: ping -c 3 {{ new_gateway }}
+      register: ping_result
+      changed_when: false
+      ignore_errors: yes
+    
+    - name: Zeige Ping-Ergebnis
+      debug:
+        msg: "Gateway {{ new_gateway }} ist {{ 'erreichbar' if ping_result.rc == 0 else 'NICHT erreichbar' }}"
+    
+    #==========================================================================
+    # Abschluss und Logging
+    #==========================================================================
+    
+    - name: Sammle finale Netzwerk-Informationen
+      command: "{{ item }}"
+      register: final_info
+      changed_when: false
+      ignore_errors: yes
+      loop:
+        - hostname
+        - ip addr show {{ primary_interface }}
+        - ip route show
+        - wicked ifstatus {{ primary_interface }}
+    
+    - name: Erstelle Abschluss-Log
+      delegate_to: localhost
+      become: no
+      copy:
+        content: |
+          ================================================================================
+          SLES Netzwerk-Update Abgeschlossen
+          ================================================================================
+          Zeitstempel: {{ ansible_date_time.iso8601 }}
+          Host: {{ inventory_hostname }}
+          
+          Änderungen:
+          -----------
+          Alter Hostname: {{ host_data['Hostname-alt'] }}
+          Neuer Hostname: {{ host_data['Hostname-neu'] }}
+          
+          Alte IP (9.x): {{ host_data['Ip-alt'] }}
+          Neue IP (9.x): {{ host_data['ip-neu'] }}
+          
+          Alte IP (10.x): {{ host_data['10-alt'] }}
+          Neue IP (10.x): {{ host_data['10-neu'] }}
+          
+          Interface: {{ primary_interface }}
+          Gateway: {{ new_gateway }}
+          Netmask: {{ new_netmask }} ({{ new_prefix }})
+          
+          Finale Konfiguration:
+          ---------------------
+          {{ final_info.results | map(attribute='stdout') | join('\n\n') }}
+          
+          Backup-Verzeichnis:
+          -------------------
+          {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}
+          
+          ================================================================================
+        dest: "{{ log_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}.log"
+        mode: '0644'
+    
+    - name: Zeige Zusammenfassung
+      debug:
+        msg:
+          - "==============================================="
+          - "SLES Netzwerk-Update erfolgreich abgeschlossen!"
+          - "==============================================="
+          - "Host: {{ inventory_hostname }}"
+          - "Neuer Hostname: {{ host_data['Hostname-neu'] }}"
+          - "Neue IP: {{ host_data['ip-neu'] }}"
+          - "Neue 10.x IP: {{ host_data['10-neu'] }}"
+          - "Interface: {{ primary_interface }}"
+          - ""
+          - "Backup: {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}"
+          - "Log: {{ log_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}.log"
+          - ""
+          - "WICHTIG: Bitte System neu starten für vollständige Aktivierung!"
+          - "==============================================="
+
+# Made with Bob
