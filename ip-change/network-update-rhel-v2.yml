@@ -1,0 +1,484 @@
+---
+#==============================================================================
+# RHEL/Oracle Linux IP-Migration Playbook v2.0
+#==============================================================================
+# Beschreibung: Migriert IP-Adressen und Hostnamen basierend auf CSV-Datei
+# Autor: Ansible Automation
+# Datum: 2026-03-18
+# 
+# Funktionen:
+# - CSV-basierte System-Identifikation
+# - Umfassende Vorabprüfungen
+# - Detailliertes Logging
+# - Backup vor Änderungen
+# - Rollback-Unterstützung
+#==============================================================================
+
+- name: RHEL/Oracle Linux IP-Migration
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    csv_file: "ip-change.csv"
+    log_dir: "/var/log/ansible-ip-migration"
+    backup_dir: "/root/network-backup-{{ ansible_date_time.epoch }}"
+    
+  tasks:
+    #==========================================================================
+    # INITIALISIERUNG UND LOGGING
+    #==========================================================================
+    
+    - name: Erstelle Log-Verzeichnis
+      file:
+        path: "{{ log_dir }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Setze Log-Datei
+      set_fact:
+        log_file: "{{ log_dir }}/migration-{{ ansible_date_time.iso8601_basic_short }}.log"
+    
+    - name: Starte Migration-Log
+      copy:
+        content: |
+          ================================================================================
+          RHEL/Oracle Linux IP-Migration Log
+          ================================================================================
+          Start: {{ ansible_date_time.iso8601 }}
+          Host: {{ ansible_hostname }}
+          IP: {{ ansible_default_ipv4.address }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          ================================================================================
+          
+        dest: "{{ log_file }}"
+        mode: '0644'
+    
+    - name: Log - System-Informationen
+      lineinfile:
+        path: "{{ log_file }}"
+        line: |
+          [{{ ansible_date_time.time }}] System-Informationen:
+          [{{ ansible_date_time.time }}]   Hostname: {{ ansible_hostname }}
+          [{{ ansible_date_time.time }}]   FQDN: {{ ansible_fqdn }}
+          [{{ ansible_date_time.time }}]   Kernel: {{ ansible_kernel }}
+          [{{ ansible_date_time.time }}]   Architektur: {{ ansible_architecture }}
+    
+    #==========================================================================
+    # CSV-DATEI LADEN
+    #==========================================================================
+    
+    - name: Prüfe ob CSV-Datei existiert
+      stat:
+        path: "{{ csv_file }}"
+      delegate_to: localhost
+      register: csv_stat
+      become: no
+    
+    - name: Fehler wenn CSV nicht gefunden
+      fail:
+        msg: "CSV-Datei nicht gefunden: {{ csv_file }}"
+      when: not csv_stat.stat.exists
+    
+    - name: Lade CSV-Datei
+      read_csv:
+        path: "{{ csv_file }}"
+        delimiter: ';'
+      delegate_to: localhost
+      register: csv_data
+      become: no
+    
+    - name: Log - CSV geladen
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] CSV-Datei geladen: {{ csv_data.list | length }} Einträge"
+    
+    #==========================================================================
+    # NETZWERK-INTERFACES IDENTIFIZIEREN
+    #==========================================================================
+    
+    - name: Sammle alle Netzwerk-Interfaces
+      shell: |
+        ip -o addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print $2, $4}'
+      register: all_interfaces
+      changed_when: false
+    
+    - name: Log - Gefundene Interfaces
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] Gefundene Interfaces:\n{{ all_interfaces.stdout }}"
+    
+    - name: Parse Interface-Informationen
+      set_fact:
+        interface_list: "{{ all_interfaces.stdout_lines | map('split', ' ') | list }}"
+    
+    - name: Zeige gefundene Interfaces
+      debug:
+        msg: "Interface: {{ item[0] }}, IP: {{ item[1] }}"
+      loop: "{{ interface_list }}"
+    
+    #==========================================================================
+    # SYSTEM IN CSV IDENTIFIZIEREN (ANHAND AKTUELLER IPS)
+    #==========================================================================
+    
+    - name: Extrahiere alle aktuellen IPs (ohne Netzmaske)
+      set_fact:
+        current_ips: "{{ interface_list | map('last') | map('regex_replace', '/.*', '') | list }}"
+    
+    - name: Log - Aktuelle IPs
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] Aktuelle IPs: {{ current_ips | join(', ') }}"
+    
+    - name: Suche System in CSV anhand 9.x IP (alt)
+      set_fact:
+        host_config: "{{ csv_data.list | selectattr('Ip-alt', 'in', current_ips) | list | first | default({}) }}"
+    
+    - name: Suche System in CSV anhand 9.x IP (neu) falls nicht gefunden
+      set_fact:
+        host_config: "{{ csv_data.list | selectattr('ip-neu', 'in', current_ips) | list | first | default({}) }}"
+      when: host_config == {}
+    
+    - name: Suche System in CSV anhand 10.x IP (alt) falls nicht gefunden
+      set_fact:
+        host_config: "{{ csv_data.list | selectattr('10-alt', 'in', current_ips) | list | first | default({}) }}"
+      when: host_config == {}
+    
+    - name: Suche System in CSV anhand 10.x IP (neu) falls nicht gefunden
+      set_fact:
+        host_config: "{{ csv_data.list | selectattr('10-neu', 'in', current_ips) | list | first | default({}) }}"
+      when: host_config == {}
+    
+    - name: Fehler wenn System nicht in CSV gefunden
+      fail:
+        msg: |
+          FEHLER: System konnte nicht in CSV identifiziert werden!
+          
+          Aktuelle IPs: {{ current_ips | join(', ') }}
+          
+          Bitte prüfen Sie:
+          1. Ist eine der aktuellen IPs in der CSV-Datei vorhanden?
+          2. Ist die CSV-Datei korrekt formatiert?
+          3. Sind die Spalten 'Ip-alt', 'ip-neu', '10-alt', '10-neu' vorhanden?
+      when: host_config == {}
+    
+    - name: Log - System identifiziert
+      lineinfile:
+        path: "{{ log_file }}"
+        line: |
+          [{{ ansible_date_time.time }}] System in CSV identifiziert:
+          [{{ ansible_date_time.time }}]   Hostname-alt: {{ host_config['Hostname-alt'] }}
+          [{{ ansible_date_time.time }}]   Hostname-neu: {{ host_config['Hostname-neu'] }}
+          [{{ ansible_date_time.time }}]   9.x IP-alt: {{ host_config['Ip-alt'] }}
+          [{{ ansible_date_time.time }}]   9.x IP-neu: {{ host_config['ip-neu'] }}
+          [{{ ansible_date_time.time }}]   10.x IP-alt: {{ host_config['10-alt'] }}
+          [{{ ansible_date_time.time }}]   10.x IP-neu: {{ host_config['10-neu'] }}
+    
+    - name: Zeige identifizierte Konfiguration
+      debug:
+        msg:
+          - "=== SYSTEM IDENTIFIZIERT ==="
+          - "Hostname-alt: {{ host_config['Hostname-alt'] }}"
+          - "Hostname-neu: {{ host_config['Hostname-neu'] }}"
+          - "9.x IP-alt: {{ host_config['Ip-alt'] }}"
+          - "9.x IP-neu: {{ host_config['ip-neu'] }}"
+          - "10.x IP-alt: {{ host_config['10-alt'] }}"
+          - "10.x IP-neu: {{ host_config['10-neu'] }}"
+    
+    #==========================================================================
+    # VORABPRÜFUNGEN
+    #==========================================================================
+    
+    - name: Prüfe NetworkManager Status
+      systemd:
+        name: NetworkManager
+      register: nm_status
+      failed_when: false
+    
+    - name: Log - NetworkManager Status
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] NetworkManager Status: {{ nm_status.status.ActiveState | default('nicht installiert') }}"
+    
+    - name: Warnung wenn NetworkManager nicht aktiv
+      debug:
+        msg: "WARNUNG: NetworkManager ist nicht aktiv. Netzwerk-Neustart könnte fehlschlagen!"
+      when: nm_status.status.ActiveState | default('') != 'active'
+    
+    - name: Prüfe ob ifcfg-Dateien existieren
+      find:
+        paths: /etc/sysconfig/network-scripts/
+        patterns: 'ifcfg-*'
+        excludes: 'ifcfg-lo'
+      register: ifcfg_files
+    
+    - name: Log - Gefundene ifcfg-Dateien
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] Gefundene ifcfg-Dateien: {{ ifcfg_files.files | map(attribute='path') | list | join(', ') }}"
+    
+    - name: Identifiziere Interface mit 9.x IP
+      set_fact:
+        interface_9x: "{{ item[0] }}"
+        current_ip_9x: "{{ item[1] | regex_replace('/.*', '') }}"
+      when: item[1] | regex_search('^9\\.')
+      loop: "{{ interface_list }}"
+    
+    - name: Identifiziere Interface mit 10.x IP
+      set_fact:
+        interface_10x: "{{ item[0] }}"
+        current_ip_10x: "{{ item[1] | regex_replace('/.*', '') }}"
+      when: item[1] | regex_search('^10\\.')
+      loop: "{{ interface_list }}"
+    
+    - name: Setze 10.x als "nicht konfiguriert" falls nicht gefunden
+      set_fact:
+        interface_10x: "{{ interface_9x | default('ens35') }}"
+        current_ip_10x: "nicht konfiguriert"
+      when: interface_10x is not defined
+    
+    - name: Log - Identifizierte Interfaces
+      lineinfile:
+        path: "{{ log_file }}"
+        line: |
+          [{{ ansible_date_time.time }}] Identifizierte Interfaces:
+          [{{ ansible_date_time.time }}]   9.x Interface: {{ interface_9x | default('NICHT GEFUNDEN') }} ({{ current_ip_9x | default('N/A') }})
+          [{{ ansible_date_time.time }}]   10.x Interface: {{ interface_10x | default('NICHT GEFUNDEN') }} ({{ current_ip_10x | default('N/A') }})
+    
+    - name: Fehler wenn 9.x Interface nicht gefunden
+      fail:
+        msg: "FEHLER: Konnte kein Interface mit 9.x IP identifizieren!"
+      when: interface_9x is not defined
+    
+    - name: Zeige Migrations-Plan
+      debug:
+        msg:
+          - "=== MIGRATIONS-PLAN ==="
+          - "Hostname: {{ ansible_hostname }} → {{ host_config['Hostname-neu'] }}"
+          - "9.x IP ({{ interface_9x }}): {{ current_ip_9x }} → {{ host_config['ip-neu'] }}"
+          - "10.x IP ({{ interface_10x }}): {{ current_ip_10x }} → {{ host_config['10-neu'] }}"
+    
+    #==========================================================================
+    # BACKUP ERSTELLEN
+    #==========================================================================
+    
+    - name: Erstelle Backup-Verzeichnis
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0700'
+    
+    - name: Backup - Hostname-Dateien
+      copy:
+        src: "{{ item }}"
+        dest: "{{ backup_dir }}/"
+        remote_src: yes
+      loop:
+        - /etc/hostname
+        - /etc/hosts
+      ignore_errors: yes
+    
+    - name: Backup - Netzwerk-Konfiguration
+      shell: |
+        cp -a /etc/sysconfig/network-scripts/ifcfg-* {{ backup_dir }}/ 2>/dev/null || true
+        cp -a /etc/sysconfig/network {{ backup_dir }}/ 2>/dev/null || true
+      changed_when: false
+    
+    - name: Backup - Aktuelle IP-Konfiguration
+      shell: |
+        ip addr show > {{ backup_dir }}/ip-addr-before.txt
+        ip route show > {{ backup_dir }}/ip-route-before.txt
+        nmcli connection show > {{ backup_dir }}/nmcli-connections-before.txt 2>/dev/null || true
+      changed_when: false
+    
+    - name: Log - Backup erstellt
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] Backup erstellt: {{ backup_dir }}"
+    
+    - name: Zeige Backup-Pfad
+      debug:
+        msg: "Backup erstellt in: {{ backup_dir }}"
+    
+    #==========================================================================
+    # HOSTNAME ÄNDERN
+    #==========================================================================
+    
+    - name: Setze neuen Hostname
+      hostname:
+        name: "{{ host_config['Hostname-neu'].split('.')[0] }}"
+    
+    - name: Update /etc/hostname
+      copy:
+        content: "{{ host_config['Hostname-neu'] }}\n"
+        dest: /etc/hostname
+        mode: '0644'
+    
+    - name: Update /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1'
+        line: "127.0.1.1 {{ host_config['Hostname-neu'] }} {{ host_config['Hostname-neu'].split('.')[0] }}"
+        backup: yes
+    
+    - name: Log - Hostname geändert
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] Hostname geändert: {{ ansible_hostname }} → {{ host_config['Hostname-neu'] }}"
+    
+    #==========================================================================
+    # NETZWERK-KONFIGURATION ÄNDERN
+    #==========================================================================
+    
+    - name: Konfiguriere 9.x Interface
+      template:
+        src: ifcfg-template.j2
+        dest: "/etc/sysconfig/network-scripts/ifcfg-{{ interface_9x }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      vars:
+        device: "{{ interface_9x }}"
+        ipaddr: "{{ host_config['ip-neu'] }}"
+        netmask: "255.255.255.128"
+        gateway: "9.125.190.1"
+        is_primary: yes
+    
+    - name: Log - 9.x Interface konfiguriert
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] 9.x Interface konfiguriert: {{ interface_9x }} → {{ host_config['ip-neu'] }}/25"
+    
+    - name: Konfiguriere 10.x Interface
+      template:
+        src: ifcfg-template.j2
+        dest: "/etc/sysconfig/network-scripts/ifcfg-{{ interface_10x }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      vars:
+        device: "{{ interface_10x }}"
+        ipaddr: "{{ host_config['10-neu'] }}"
+        netmask: "255.255.255.0"
+        gateway: ""
+        is_primary: no
+      when: interface_9x != interface_10x
+    
+    - name: Log - 10.x Interface konfiguriert
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] 10.x Interface konfiguriert: {{ interface_10x }} → {{ host_config['10-neu'] }}/24"
+      when: interface_9x != interface_10x
+    
+    #==========================================================================
+    # NETZWERK NEU STARTEN
+    #==========================================================================
+    
+    - name: Wende Netzwerk-Änderungen an (nmcli device reapply)
+      shell: |
+        nmcli device reapply {{ item }} || nmcli connection up {{ item }} || true
+      loop:
+        - "{{ interface_9x }}"
+        - "{{ interface_10x }}"
+      when: interface_9x != interface_10x
+      async: 30
+      poll: 0
+      register: network_restart
+    
+    - name: Wende Netzwerk-Änderungen an (nur 9.x Interface)
+      shell: |
+        nmcli device reapply {{ interface_9x }} || nmcli connection up {{ interface_9x }} || true
+      when: interface_9x == interface_10x
+      async: 30
+      poll: 0
+      register: network_restart_single
+    
+    - name: Warte auf Netzwerk-Neustart
+      pause:
+        seconds: 5
+    
+    - name: Log - Netzwerk neu gestartet
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] Netzwerk-Änderungen angewendet"
+    
+    #==========================================================================
+    # VALIDIERUNG
+    #==========================================================================
+    
+    - name: Sammle neue IP-Konfiguration
+      shell: |
+        ip addr show > {{ backup_dir }}/ip-addr-after.txt
+        ip route show > {{ backup_dir }}/ip-route-after.txt
+      changed_when: false
+      ignore_errors: yes
+    
+    - name: Hole neue IP-Adressen
+      shell: |
+        ip -o addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print $2, $4}'
+      register: new_interfaces
+      changed_when: false
+    
+    - name: Log - Neue IP-Konfiguration
+      lineinfile:
+        path: "{{ log_file }}"
+        line: |
+          [{{ ansible_date_time.time }}] Neue IP-Konfiguration:
+          {{ new_interfaces.stdout }}
+    
+    - name: Zeige neue IP-Konfiguration
+      debug:
+        msg: "{{ new_interfaces.stdout_lines }}"
+    
+    #==========================================================================
+    # ABSCHLUSS
+    #==========================================================================
+    
+    - name: Erstelle Rollback-Script
+      copy:
+        content: |
+          #!/bin/bash
+          # Rollback-Script für IP-Migration
+          # Erstellt: {{ ansible_date_time.iso8601 }}
+          
+          echo "Starte Rollback..."
+          
+          # Hostname zurücksetzen
+          hostnamectl set-hostname {{ ansible_hostname }}
+          
+          # Netzwerk-Konfiguration zurücksetzen
+          cp -a {{ backup_dir }}/ifcfg-* /etc/sysconfig/network-scripts/
+          
+          # Netzwerk neu starten
+          systemctl restart NetworkManager
+          
+          echo "Rollback abgeschlossen. Bitte System neu starten!"
+        dest: "{{ backup_dir }}/rollback.sh"
+        mode: '0755'
+    
+    - name: Abschluss-Log
+      lineinfile:
+        path: "{{ log_file }}"
+        line: |
+          [{{ ansible_date_time.time }}] ================================================================================
+          [{{ ansible_date_time.time }}] Migration abgeschlossen
+          [{{ ansible_date_time.time }}] ================================================================================
+          [{{ ansible_date_time.time }}] Backup: {{ backup_dir }}
+          [{{ ansible_date_time.time }}] Rollback: {{ backup_dir }}/rollback.sh
+          [{{ ansible_date_time.time }}] Log: {{ log_file }}
+          [{{ ansible_date_time.time }}] ================================================================================
+    
+    - name: Zeige Zusammenfassung
+      debug:
+        msg:
+          - "=== MIGRATION ABGESCHLOSSEN ==="
+          - "Backup: {{ backup_dir }}"
+          - "Rollback: {{ backup_dir }}/rollback.sh"
+          - "Log: {{ log_file }}"
+          - ""
+          - "WICHTIG: Bitte System neu starten für vollständige Aktivierung!"
+          - "Bei Problemen: bash {{ backup_dir }}/rollback.sh"
+
+# Made with Bob
