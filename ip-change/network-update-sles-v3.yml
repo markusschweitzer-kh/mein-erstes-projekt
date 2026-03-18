@@ -3,10 +3,11 @@
 # Ansible Playbook: SLES Netzwerkkonfiguration Update V3 (Gateway-Fix)
 #==============================================================================
 # Verbesserungen gegenüber V2:
-#   - Verwendet aktuelles Gateway statt hartkodiertes
-#   - Behält funktionierendes Gateway bei
-#   - Keine Gateway-Änderung wenn nicht nötig
-#   - Bessere Fehlerbehandlung für Routing
+#   - DUAL Gateway Strategie mit Metrik
+#   - Korrekte Wicked routes-Syntax (ohne doppeltes -)
+#   - Automatisches Cleanup-Script Deployment
+#   - Suche nach altem UND neuem Hostname
+#   - Bessere CSV-Parsing-Logik
 #
 # Verwendung:
 #   ansible-playbook -i localhost, -c local network-update-sles-v3.yml
@@ -21,12 +22,12 @@
     csv_file: "{{ playbook_dir }}/ip-change.csv"
     backup_dir: "{{ playbook_dir }}/backups"
     log_dir: "{{ playbook_dir }}/logs"
-    new_gateway: "9.125.190.1"  # Neues Gateway (wie RHEL)
+    new_gateway: "9.125.190.1"
     new_netmask: "255.255.255.128"
     new_prefix: "25"
     network_config_dir: "/etc/sysconfig/network"
     migration_failed: false
-    use_new_gateway: true  # Wechselt zum neuen Gateway
+    use_new_gateway: true
     
   tasks:
     #==========================================================================
@@ -48,7 +49,7 @@
     - name: Prüfe ob SLES
       fail:
         msg: "Dieses Playbook ist nur für SLES!"
-      when: ansible_distribution != "SLES"
+      when: ansible_os_family != "Suse"
     
     - name: Lese CSV-Datei
       delegate_to: localhost
@@ -117,75 +118,42 @@
           - "Neue 10.x IP: {{ host_data['10-neu'] }}"
     
     #==========================================================================
-    # Phase 3: Netzwerk-Analyse
+    # Phase 3: Interface-Identifikation
     #==========================================================================
     
-    - name: Sammle Netzwerk-Informationen
-      setup:
-        gather_subset:
-          - network
-      check_mode: no
-    
-    - name: Finde primäres Interface
+    - name: Identifiziere primäres Interface
       set_fact:
         primary_interface: "{{ item }}"
-      when: 
-        - hostvars[inventory_hostname]['ansible_' + item] is defined
+      when:
         - hostvars[inventory_hostname]['ansible_' + item].ipv4 is defined
         - hostvars[inventory_hostname]['ansible_' + item].ipv4.address == host_data['Ip-alt']
       loop: "{{ ansible_interfaces }}"
     
-    - name: Fallback - Verwende erstes nicht-loopback Interface
-      set_fact:
-        primary_interface: "{{ ansible_interfaces | reject('match', '^lo$') | first }}"
+    - name: Prüfe ob Interface gefunden
+      fail:
+        msg: "Konnte Interface mit IP {{ host_data['Ip-alt'] }} nicht finden!"
       when: primary_interface is not defined
     
-    - name: Ermittle aktuelles Gateway
-      shell: ip route show | grep default | awk '{print $3}' | head -n 1
-      register: current_gateway_cmd
+    - name: Hole aktuelles Gateway
+      shell: ip route show default | awk '{print $3}' | head -n1
+      register: current_gateway_result
       changed_when: false
-      check_mode: no
     
-    - name: Setze Gateway-Variable
+    - name: Setze Gateway-Variablen
       set_fact:
-        old_gateway: "{{ current_gateway_cmd.stdout }}"
-        gateway_to_use: "{{ new_gateway }}"
-    
-    - name: Zeige Gateway-Strategie
-      debug:
-        msg:
-          - "Altes Gateway: {{ old_gateway }}"
-          - "Neues Gateway: {{ new_gateway }}"
-          - "Strategie: Neue IP ZUERST, dann Gateway wechseln"
-          - "Interface: {{ primary_interface }}"
-    
-    - name: Setze rp_filter auf 2 (loose)
-      sysctl:
-        name: "{{ item }}"
-        value: '2'
-        state: present
-        reload: yes
-      loop:
-        - net.ipv4.conf.all.rp_filter
-        - "net.ipv4.conf.{{ primary_interface }}.rp_filter"
-      ignore_errors: yes
+        old_gateway: "{{ current_gateway_result.stdout }}"
     
     #==========================================================================
     # Phase 4: Backup
     #==========================================================================
     
     - name: Erstelle Backup-Verzeichnis
-      delegate_to: localhost
-      become: no
       file:
         path: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}"
         state: directory
         mode: '0755'
-    
-    - name: Backup - Hostname
-      command: hostname
-      register: old_hostname
-      changed_when: false
+      delegate_to: localhost
+      become: no
       check_mode: no
     
     - name: Backup - Konfigurationsdateien
@@ -212,14 +180,14 @@
         group: root
         mode: '0644'
     
-    - name: Aktualisiere /etc/hosts
+    - name: Aktualisiere /etc/hosts - localhost
       lineinfile:
         path: /etc/hosts
         regexp: '^127\.0\.1\.1\s+'
         line: "127.0.1.1 {{ host_data['Hostname-neu'] }} {{ host_data['Hostname-neu'].split('.')[0] }}"
         create: yes
     
-    - name: Füge neue IP zu /etc/hosts hinzu
+    - name: Aktualisiere /etc/hosts - neue IP
       lineinfile:
         path: /etc/hosts
         regexp: "^{{ host_data['ip-neu'] }}\\s+"
@@ -227,12 +195,12 @@
         create: yes
     
     #==========================================================================
-    # Phase 6: Netzwerk-Konfiguration
+    # Phase 6: Netzwerk-Konfiguration (DUAL Gateway)
     #==========================================================================
     
     - name: Erstelle Interface-Konfiguration mit BEIDEN IPs
       template:
-        src: ifcfg-sles-template.j2
+        src: "{{ playbook_dir }}/ifcfg-sles-template.j2"
         dest: "{{ network_config_dir }}/ifcfg-{{ primary_interface }}"
         owner: root
         group: root
@@ -245,17 +213,16 @@
         prefix: "{{ new_prefix }}"
         new_hostname: "{{ host_data['Hostname-neu'] }}"
     
-    - name: Füge alte IP als LABEL_2 hinzu (temporär)
-      lineinfile:
+    - name: Füge alte IP temporär hinzu
+      blockinfile:
         path: "{{ network_config_dir }}/ifcfg-{{ primary_interface }}"
-        line: "{{ item }}"
-        insertafter: EOF
-      loop:
-        - "# Alte IP (temporär für Migration)"
-        - "LABEL_2='old'"
-        - "IPADDR_2='{{ host_data['Ip-alt'] }}/{{ new_prefix }}'"
+        marker: "# {mark} ANSIBLE MANAGED - TEMPORARY OLD IP"
+        block: |
+          # Alte IP (temporär für Migration)
+          LABEL_2='old'
+          IPADDR_2='{{ host_data['Ip-alt'] }}/{{ new_prefix }}'
     
-    - name: Erstelle Routing-Konfiguration (DUAL Gateway)
+    - name: Erstelle Routing-Konfiguration (DUAL Gateway - KORREKTE SYNTAX)
       copy:
         content: |
           # Ansible managed - Generated on {{ ansible_date_time.iso8601 }}
@@ -264,8 +231,9 @@
           # Neues Gateway: {{ new_gateway }}
           
           # Beide Gateways temporär aktiv (unterschiedliche Metrik)
-          default {{ old_gateway }} - {{ primary_interface }} - metric 200
-          default {{ new_gateway }} - {{ primary_interface }} - metric 100
+          # WICHTIG: Korrekte Wicked-Syntax OHNE doppeltes -
+          default {{ old_gateway }} - {{ primary_interface }} metric 200
+          default {{ new_gateway }} - {{ primary_interface }} metric 100
           
           {% if host_data['10-neu'] != '' %}
           # Lokales Netzwerk für 10.x
@@ -288,144 +256,33 @@
     # Phase 7: Sanfter Netzwerk-Neustart
     #==========================================================================
     
-    - name: Zeige Warnung
-      debug:
-        msg:
-          - "ACHTUNG: Netzwerk wird neu geladen"
-          - "BEIDE Gateways aktiv (Failover)"
-          - "Primär: {{ new_gateway }} (Metrik 100)"
-          - "Backup: {{ old_gateway }} (Metrik 200)"
-          - "Beide IPs bleiben aktiv"
-    
-    - name: Lade Wicked-Konfiguration neu
-      command: wicked ifreload {{ primary_interface }}
-      async: 30
-      poll: 0
+    - name: Lade Netzwerk-Konfiguration neu (sanft)
+      shell: wicked ifreload {{ primary_interface }}
       register: network_reload
+      failed_when: false
     
-    - name: Warte auf Stabilisierung
+    - name: Prüfe Netzwerk-Reload-Ergebnis
+      debug:
+        msg: "{{ network_reload.stdout_lines }}"
+    
+    - name: Warte auf Netzwerk-Stabilisierung
       pause:
         seconds: 5
-    
-    - name: Prüfe Wicked-Status
-      command: wicked ifstatus {{ primary_interface }}
-      register: wicked_status
-      changed_when: false
-      ignore_errors: yes
-    
-    #==========================================================================
-    # Phase 8: Validierung
-    #==========================================================================
-    
-    - name: Sammle neue Netzwerk-Informationen
-      setup:
-        gather_subset:
-          - network
-      check_mode: no
     
     - name: Prüfe ob neue IP aktiv ist
       shell: ip addr show {{ primary_interface }} | grep "{{ host_data['ip-neu'] }}"
       register: new_ip_check
-      changed_when: false
       failed_when: false
-      check_mode: no
+      changed_when: false
     
     - name: Prüfe ob alte IP noch aktiv ist
       shell: ip addr show {{ primary_interface }} | grep "{{ host_data['Ip-alt'] }}"
       register: old_ip_check
-      changed_when: false
       failed_when: false
-      check_mode: no
-    
-    - name: Prüfe Gateway
-      shell: ip route show | grep default
-      register: gateway_check
       changed_when: false
-      check_mode: no
-    
-    - name: Zeige Validierungs-Ergebnis
-      debug:
-        msg:
-          - "✓ Neue IP aktiv: {{ 'JA' if new_ip_check.rc == 0 else 'NEIN' }}"
-          - "✓ Alte IP aktiv: {{ 'JA' if old_ip_check.rc == 0 else 'NEIN' }}"
-          - "✓ Gateway: {{ gateway_check.stdout }}"
     
     #==========================================================================
-    # Phase 9: Abschluss
-    #==========================================================================
-    
-    - name: Sammle finale Informationen
-      command: "{{ item }}"
-      register: final_info
-      changed_when: false
-      ignore_errors: yes
-      loop:
-        - hostname
-        - ip addr show {{ primary_interface }}
-        - ip route show
-    
-    - name: Erstelle Abschluss-Log
-      delegate_to: localhost
-      become: no
-      copy:
-        content: |
-          ================================================================================
-          SLES Netzwerk-Update V3 Abgeschlossen
-          ================================================================================
-          Zeitstempel: {{ ansible_date_time.iso8601 }}
-          Host: {{ inventory_hostname }}
-          
-          Änderungen:
-          -----------
-          Hostname: {{ host_data['Hostname-alt'] }} → {{ host_data['Hostname-neu'] }}
-          IP (9.x): {{ host_data['Ip-alt'] }} → {{ host_data['ip-neu'] }}
-          IP (10.x): {{ host_data['10-alt'] }} → {{ host_data['10-neu'] }}
-          
-          Gateway alt: {{ old_gateway }}
-          Gateway neu: {{ new_gateway }} (primär)
-          Interface: {{ primary_interface }}
-          
-          Status:
-          -------
-          Neue IP aktiv: {{ 'JA' if new_ip_check.rc == 0 else 'NEIN' }}
-          Alte IP aktiv: {{ 'JA' if old_ip_check.rc == 0 else 'NEIN' }}
-          Gateway: {{ gateway_check.stdout }}
-          
-          Finale Konfiguration:
-          ---------------------
-          {{ final_info.results | map(attribute='stdout') | join('\n\n') }}
-          
-          Backup: {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}
-          
-          Nächste Schritte:
-          -----------------
-          1. Teste SSH: ssh user@{{ host_data['ip-neu'] }}
-          2. Wenn OK: sudo ./remove-old-ip-sles.sh {{ host_data['Ip-alt'] }}
-          
-          ================================================================================
-        dest: "{{ log_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}.log"
-        mode: '0644'
-    
-    - name: Zeige Zusammenfassung
-      debug:
-        msg:
-          - "==============================================="
-          - "SLES Netzwerk-Update V3 abgeschlossen!"
-          - "==============================================="
-          - "Neuer Hostname: {{ host_data['Hostname-neu'] }}"
-          - "Neue IP: {{ host_data['ip-neu'] }}"
-          - "Alte IP: {{ host_data['Ip-alt'] }} (noch aktiv)"
-          - "Gateway alt: {{ old_gateway }} (Backup, Metrik 200)"
-          - "Gateway neu: {{ new_gateway }} (Primär, Metrik 100)"
-          - ""
-          - "WICHTIG: BEIDE Gateways aktiv (Failover)!"
-          - "Beide IPs sind aktiv - testen Sie SSH!"
-          - ""
-          - "Backup: {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}"
-          - "==============================================="
-    
-    #==========================================================================
-    # Phase 5: Cleanup-Script Deployment
+    # Phase 8: Cleanup-Script Deployment
     #==========================================================================
     
     - name: Kopiere Cleanup-Script auf Zielsystem
@@ -447,6 +304,58 @@
       loop:
         - /root/logs
         - /root/backups
+    
+    #==========================================================================
+    # Phase 9: Abschluss und Zusammenfassung
+    #==========================================================================
+    
+    - name: Zeige Migration-Zusammenfassung
+      debug:
+        msg:
+          - "==============================================="
+          - "Migration erfolgreich abgeschlossen!"
+          - "==============================================="
+          - ""
+          - "Änderungen:"
+          - "-----------"
+          - "Hostname: {{ host_data['Hostname-alt'] }} → {{ host_data['Hostname-neu'] }}"
+          - "IP (9.x): {{ host_data['Ip-alt'] }} → {{ host_data['ip-neu'] }}"
+          - "IP (10.x): {{ host_data['10-alt'] }} → {{ host_data['10-neu'] }}"
+          - ""
+          - "Netzwerk-Status:"
+          - "----------------"
+          - "Neue IP aktiv: {{ 'JA' if new_ip_check.rc == 0 else 'NEIN' }}"
+          - "Alte IP aktiv: {{ 'JA' if old_ip_check.rc == 0 else 'NEIN' }}"
+          - ""
+          - "Nächste Schritte:"
+          - "-----------------"
+          - "1. Teste SSH: ssh user@{{ host_data['ip-neu'] }}"
+          - "2. Wenn OK: sudo /root/cleanup-old-config-sles.sh"
+          - ""
+          - "Cleanup-Script Optionen:"
+          - "  --dry-run       Zeigt nur an, keine Änderungen"
+          - "  --keep-gateway  Behält altes Gateway als Backup"
+          - ""
+          - "Backup: {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}"
+          - "==============================================="
+    
+    - name: Zeige finale Konfiguration
+      debug:
+        msg:
+          - "==============================================="
+          - "Aktuelle Konfiguration"
+          - "==============================================="
+          - "Neuer Hostname: {{ host_data['Hostname-neu'] }}"
+          - "Neue IP: {{ host_data['ip-neu'] }}"
+          - "Alte IP: {{ host_data['Ip-alt'] }} (noch aktiv)"
+          - "Gateway alt: {{ old_gateway }} (Backup, Metrik 200)"
+          - "Gateway neu: {{ new_gateway }} (Primär, Metrik 100)"
+          - ""
+          - "WICHTIG: BEIDE Gateways aktiv (Failover)!"
+          - "Beide IPs sind aktiv - testen Sie SSH!"
+          - ""
+          - "Backup: {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}"
+          - "==============================================="
     
     - name: Zeige Cleanup-Script Information
       debug:

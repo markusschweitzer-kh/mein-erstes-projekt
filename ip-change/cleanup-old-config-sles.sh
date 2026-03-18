@@ -203,6 +203,13 @@ remove_old_gateway() {
     local temp_file=$(mktemp)
     grep -v "metric 200" "${routes_file}" > "${temp_file}" || true
     
+    # Bereinige Metrik-Syntax in verbleibenden Zeilen
+    # Ändere "- metric 100" zu "metric 100" (ohne führendes -)
+    sed -i 's/- metric \([0-9]\+\)/metric \1/g' "${temp_file}"
+    
+    # Entferne leere Zeilen
+    sed -i '/^[[:space:]]*$/d' "${temp_file}"
+    
     # Ersetze Original-Datei
     mv "${temp_file}" "${routes_file}"
     chmod 644 "${routes_file}"
