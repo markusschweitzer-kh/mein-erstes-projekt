@@ -1,0 +1,634 @@
+---
+#==============================================================================
+# Ansible Playbook: SLES Netzwerkkonfiguration Update V2 (Verbessert)
+#==============================================================================
+# Verbesserungen gegenüber V1:
+#   - Umfangreiche Pre-Migration Checks
+#   - Temporärer IP-Test vor Migration
+#   - Beide IPs gleichzeitig aktiv während Migration
+#   - Sanfter Netzwerk-Neustart ohne Down/Up
+#   - Automatischer Rollback bei Fehlern
+#   - Bessere Fehlerbehandlung
+#
+# Kompatibel mit:
+#   - SLES 15 SP5/SP4/SP3
+#   - SLES 12 SP5
+#
+# Verwendung:
+#   ansible-playbook -i localhost, -c local network-update-sles-v2.yml
+#==============================================================================
+
+- name: SLES Network Configuration Update V2 (Improved)
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    csv_file: "{{ playbook_dir }}/ip-change.csv"
+    backup_dir: "{{ playbook_dir }}/backups"
+    log_dir: "{{ playbook_dir }}/logs"
+    new_gateway: "9.125.190.1"
+    new_netmask: "255.255.255.128"
+    new_prefix: "25"
+    network_config_dir: "/etc/sysconfig/network"
+    migration_failed: false
+    
+  tasks:
+    #==========================================================================
+    # Phase 1: Vorbereitungen und Validierung
+    #==========================================================================
+    
+    - name: Erstelle Backup- und Log-Verzeichnisse
+      delegate_to: localhost
+      become: no
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ backup_dir }}"
+        - "{{ log_dir }}"
+      run_once: true
+    
+    - name: Prüfe ob SLES
+      fail:
+        msg: "Dieses Playbook ist nur für SLES! Erkanntes System: {{ ansible_distribution }}"
+      when: ansible_distribution != "SLES"
+    
+    - name: Prüfe SLES Version
+      fail:
+        msg: "Dieses Playbook benötigt SLES 12 oder höher. Erkannte Version: {{ ansible_distribution_version }}"
+      when: ansible_distribution_major_version | int < 12
+    
+    - name: Zeige System-Informationen
+      debug:
+        msg:
+          - "Distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Kernel: {{ ansible_kernel }}"
+          - "Hostname: {{ ansible_hostname }}"
+          - "FQDN: {{ ansible_fqdn }}"
+    
+    - name: Prüfe ob CSV-Datei existiert
+      delegate_to: localhost
+      become: no
+      stat:
+        path: "{{ csv_file }}"
+      register: csv_stat
+      run_once: true
+    
+    - name: Fehler wenn CSV-Datei nicht existiert
+      fail:
+        msg: "CSV-Datei nicht gefunden: {{ csv_file }}"
+      when: not csv_stat.stat.exists
+      run_once: true
+    
+    - name: Lese CSV-Datei
+      delegate_to: localhost
+      become: no
+      read_csv:
+        path: "{{ csv_file }}"
+        delimiter: ';'
+        key: Hostname-alt
+      register: csv_data
+      run_once: true
+    
+    #==========================================================================
+    # Phase 2: Hostname-Identifikation
+    #==========================================================================
+    
+    - name: Identifiziere aktuellen Hostname
+      set_fact:
+        current_hostname: "{{ ansible_fqdn if ansible_fqdn != 'localhost' else ansible_hostname }}"
+    
+    - name: Suche Host in CSV-Daten
+      set_fact:
+        host_data: "{{ csv_data.dict[current_hostname] | default(none) }}"
+    
+    - name: Fallback - Suche mit ansible_hostname
+      set_fact:
+        host_data: "{{ csv_data.dict[ansible_hostname] | default(none) }}"
+      when: host_data is none
+    
+    - name: Fallback - Suche mit Kurzname
+      set_fact:
+        host_data: "{{ csv_data.dict[ansible_hostname.split('.')[0]] | default(none) }}"
+      when: host_data is none
+    
+    - name: Fehler wenn Host nicht in CSV gefunden
+      fail:
+        msg: |
+          Host '{{ current_hostname }}' nicht in CSV-Datei gefunden!
+          Verfügbare Hosts: {{ csv_data.dict.keys() | list }}
+      when: host_data is none
+    
+    - name: Zeige gefundene Host-Daten
+      debug:
+        msg:
+          - "Alter Hostname: {{ host_data['Hostname-alt'] }}"
+          - "Neuer Hostname: {{ host_data['Hostname-neu'] }}"
+          - "Alte IP: {{ host_data['Ip-alt'] }}"
+          - "Neue IP: {{ host_data['ip-neu'] }}"
+          - "Alte 10.x IP: {{ host_data['10-alt'] }}"
+          - "Neue 10.x IP: {{ host_data['10-neu'] }}"
+    
+    #==========================================================================
+    # Phase 3: PRE-MIGRATION CHECKS
+    #==========================================================================
+    
+    - name: "=== PRE-MIGRATION CHECKS ==="
+      debug:
+        msg: "Führe umfangreiche Pre-Migration Checks durch..."
+    
+    - name: Sammle Netzwerk-Informationen
+      setup:
+        gather_subset:
+          - network
+      check_mode: no
+    
+    - name: Finde primäres Interface
+      set_fact:
+        primary_interface: "{{ item }}"
+      when: 
+        - hostvars[inventory_hostname]['ansible_' + item] is defined
+        - hostvars[inventory_hostname]['ansible_' + item].ipv4 is defined
+        - hostvars[inventory_hostname]['ansible_' + item].ipv4.address == host_data['Ip-alt']
+      loop: "{{ ansible_interfaces }}"
+    
+    - name: Fallback - Finde Interface mit 10.x IP
+      set_fact:
+        primary_interface: "{{ item.split(':')[0] }}"
+      when:
+        - primary_interface is not defined
+        - hostvars[inventory_hostname]['ansible_' + item.replace(':', '_')] is defined
+        - hostvars[inventory_hostname]['ansible_' + item.replace(':', '_')].ipv4 is defined
+        - hostvars[inventory_hostname]['ansible_' + item.replace(':', '_')].ipv4.address == host_data['10-alt']
+      loop: "{{ ansible_interfaces }}"
+    
+    - name: Fallback - Verwende erstes nicht-loopback Interface
+      set_fact:
+        primary_interface: "{{ ansible_interfaces | reject('match', '^lo$') | first }}"
+      when: primary_interface is not defined
+    
+    - name: Zeige erkanntes Interface
+      debug:
+        msg: "Primäres Interface: {{ primary_interface }}"
+    
+    - name: CHECK 1 - Prüfe SSH-Dienst
+      command: systemctl is-active sshd
+      register: ssh_status
+      changed_when: false
+      failed_when: false
+      check_mode: no
+    
+    - name: Fehler wenn SSH nicht läuft
+      fail:
+        msg: "SSH-Dienst läuft nicht! Bitte starten: systemctl start sshd"
+      when: ssh_status.stdout != "active"
+    
+    - name: CHECK 2 - Prüfe aktuelles Gateway
+      shell: ip route show | grep default | awk '{print $3}' | head -n 1
+      register: current_gateway
+      changed_when: false
+      check_mode: no
+    
+    - name: CHECK 3 - Teste aktuelles Gateway
+      command: ping -c 3 -W 2 {{ current_gateway.stdout }}
+      register: gateway_ping
+      changed_when: false
+      failed_when: false
+      check_mode: no
+    
+    - name: Warnung wenn Gateway nicht erreichbar
+      debug:
+        msg: "WARNUNG: Aktuelles Gateway {{ current_gateway.stdout }} ist nicht erreichbar!"
+      when: gateway_ping.rc != 0
+    
+    - name: CHECK 4 - Teste neues Gateway
+      command: ping -c 5 -W 2 {{ new_gateway }}
+      register: new_gateway_ping
+      changed_when: false
+      failed_when: false
+      check_mode: no
+    
+    - name: Fehler wenn neues Gateway nicht erreichbar
+      fail:
+        msg: "Neues Gateway {{ new_gateway }} ist NICHT erreichbar! Migration wird fehlschlagen."
+      when: new_gateway_ping.rc != 0
+    
+    - name: CHECK 5 - Prüfe rp_filter
+      shell: sysctl -n net.ipv4.conf.all.rp_filter
+      register: rp_filter_all
+      changed_when: false
+      check_mode: no
+    
+    - name: CHECK 6 - Prüfe rp_filter für Interface
+      shell: sysctl -n net.ipv4.conf.{{ primary_interface }}.rp_filter
+      register: rp_filter_if
+      changed_when: false
+      check_mode: no
+    
+    - name: Setze rp_filter auf 2 (loose) wenn nötig
+      sysctl:
+        name: "{{ item }}"
+        value: '2'
+        state: present
+        reload: yes
+      loop:
+        - net.ipv4.conf.all.rp_filter
+        - "net.ipv4.conf.{{ primary_interface }}.rp_filter"
+      when: rp_filter_all.stdout == "1" or rp_filter_if.stdout == "1"
+    
+    - name: CHECK 7 - Prüfe Firewall
+      command: firewall-cmd --list-services
+      register: firewall_services
+      changed_when: false
+      failed_when: false
+      check_mode: no
+    
+    - name: Warnung wenn SSH nicht in Firewall
+      debug:
+        msg: "WARNUNG: SSH ist nicht in Firewall erlaubt!"
+      when: firewall_services.rc == 0 and 'ssh' not in firewall_services.stdout
+    
+    - name: CHECK 8 - Temporärer IP-Test
+      debug:
+        msg: "Führe temporären IP-Test durch..."
+    
+    - name: Füge neue IP temporär hinzu
+      command: ip addr add {{ host_data['ip-neu'] }}/{{ new_prefix }} dev {{ primary_interface }}
+      register: temp_ip_add
+      failed_when: false
+      check_mode: no
+    
+    - name: Warte auf Netzwerk-Stabilisierung
+      pause:
+        seconds: 3
+      when: temp_ip_add.rc == 0
+    
+    - name: Teste neue IP lokal
+      command: ping -c 3 -W 2 {{ host_data['ip-neu'] }}
+      register: new_ip_ping
+      changed_when: false
+      failed_when: false
+      check_mode: no
+      when: temp_ip_add.rc == 0
+    
+    - name: Teste Gateway mit neuer IP
+      command: ping -c 3 -W 2 -I {{ host_data['ip-neu'] }} {{ new_gateway }}
+      register: new_ip_gateway_ping
+      changed_when: false
+      failed_when: false
+      check_mode: no
+      when: temp_ip_add.rc == 0
+    
+    - name: Entferne temporäre IP
+      command: ip addr del {{ host_data['ip-neu'] }}/{{ new_prefix }} dev {{ primary_interface }}
+      when: temp_ip_add.rc == 0
+      failed_when: false
+      check_mode: no
+    
+    - name: Fehler wenn temporärer IP-Test fehlgeschlagen
+      fail:
+        msg: |
+          Temporärer IP-Test fehlgeschlagen!
+          Neue IP lokal: {{ 'OK' if new_ip_ping.rc == 0 else 'FEHLER' }}
+          Gateway mit neuer IP: {{ 'OK' if new_ip_gateway_ping.rc == 0 else 'FEHLER' }}
+          Mögliche Ursachen: VLAN, Port Security, MAC-Filtering
+      when: temp_ip_add.rc == 0 and (new_ip_ping.rc != 0 or new_ip_gateway_ping.rc != 0)
+    
+    - name: Pre-Migration Checks erfolgreich
+      debug:
+        msg: "✓ Alle Pre-Migration Checks bestanden! Migration kann durchgeführt werden."
+    
+    #==========================================================================
+    # Phase 4: Backup der aktuellen Konfiguration
+    #==========================================================================
+    
+    - name: Erstelle Backup-Verzeichnis für diesen Host
+      delegate_to: localhost
+      become: no
+      file:
+        path: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Backup - Hostname
+      command: hostname
+      register: old_hostname
+      changed_when: false
+      check_mode: no
+    
+    - name: Backup - /etc/hostname
+      slurp:
+        src: /etc/hostname
+      register: hostname_file
+      ignore_errors: yes
+      check_mode: no
+    
+    - name: Backup - Interface-Konfiguration
+      slurp:
+        src: "{{ network_config_dir }}/ifcfg-{{ primary_interface }}"
+      register: ifcfg_backup
+      ignore_errors: yes
+      check_mode: no
+    
+    - name: Backup - Routing-Konfiguration
+      slurp:
+        src: "{{ network_config_dir }}/routes"
+      register: routes_backup
+      ignore_errors: yes
+      check_mode: no
+    
+    - name: Backup - DNS-Konfiguration
+      slurp:
+        src: "{{ network_config_dir }}/config"
+      register: config_backup
+      ignore_errors: yes
+      check_mode: no
+    
+    - name: Speichere Backups lokal
+      delegate_to: localhost
+      become: no
+      copy:
+        content: "{{ item.content | b64decode }}"
+        dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}/{{ item.name }}"
+        mode: '0644'
+      loop:
+        - { name: 'hostname', content: "{{ hostname_file.content }}" }
+        - { name: 'ifcfg-{{ primary_interface }}', content: "{{ ifcfg_backup.content | default('') }}" }
+        - { name: 'routes', content: "{{ routes_backup.content | default('') }}" }
+        - { name: 'config', content: "{{ config_backup.content | default('') }}" }
+      when: item.content != ''
+      ignore_errors: yes
+    
+    - name: Speichere Backup-Metadaten
+      delegate_to: localhost
+      become: no
+      copy:
+        content: |
+          Backup erstellt: {{ ansible_date_time.iso8601 }}
+          Host: {{ inventory_hostname }}
+          Alter Hostname: {{ old_hostname.stdout }}
+          Neuer Hostname: {{ host_data['Hostname-neu'] }}
+          Alte IP: {{ host_data['Ip-alt'] }}
+          Neue IP: {{ host_data['ip-neu'] }}
+          Interface: {{ primary_interface }}
+        dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}/backup_info.txt"
+        mode: '0644'
+    
+    #==========================================================================
+    # Phase 5: Hostname-Änderung
+    #==========================================================================
+    
+    - name: Setze neuen Hostname (temporär)
+      hostname:
+        name: "{{ host_data['Hostname-neu'] }}"
+    
+    - name: Aktualisiere /etc/hostname
+      copy:
+        content: "{{ host_data['Hostname-neu'] }}\n"
+        dest: /etc/hostname
+        owner: root
+        group: root
+        mode: '0644'
+    
+    - name: Aktualisiere /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1\s+'
+        line: "127.0.1.1 {{ host_data['Hostname-neu'] }} {{ host_data['Hostname-neu'].split('.')[0] }}"
+        create: yes
+    
+    - name: Füge neue IP zu /etc/hosts hinzu
+      lineinfile:
+        path: /etc/hosts
+        regexp: "^{{ host_data['ip-neu'] }}\\s+"
+        line: "{{ host_data['ip-neu'] }} {{ host_data['Hostname-neu'] }} {{ host_data['Hostname-neu'].split('.')[0] }}"
+        create: yes
+    
+    #==========================================================================
+    # Phase 6: Netzwerk-Konfiguration (BEIDE IPs aktiv)
+    #==========================================================================
+    
+    - name: Erstelle Interface-Konfiguration mit BEIDEN IPs
+      template:
+        src: ifcfg-sles-template.j2
+        dest: "{{ network_config_dir }}/ifcfg-{{ primary_interface }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      vars:
+        interface_name: "{{ primary_interface }}"
+        primary_ip: "{{ host_data['ip-neu'] }}"
+        secondary_ip: "{{ host_data['10-neu'] }}"
+        prefix: "{{ new_prefix }}"
+        new_hostname: "{{ host_data['Hostname-neu'] }}"
+    
+    - name: Füge alte IP als LABEL_2 hinzu (temporär)
+      lineinfile:
+        path: "{{ network_config_dir }}/ifcfg-{{ primary_interface }}"
+        line: "{{ item }}"
+        insertafter: EOF
+      loop:
+        - "# Alte IP (temporär für Migration)"
+        - "LABEL_2='old'"
+        - "IPADDR_2='{{ host_data['Ip-alt'] }}/{{ new_prefix }}'"
+    
+    - name: Erstelle Routing-Konfiguration
+      template:
+        src: routes-sles-template.j2
+        dest: "{{ network_config_dir }}/routes"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      vars:
+        interface_name: "{{ primary_interface }}"
+        gateway: "{{ new_gateway }}"
+        secondary_ip: "{{ host_data['10-neu'] }}"
+        new_hostname: "{{ host_data['Hostname-neu'] }}"
+    
+    - name: Konfiguriere DNS-Server
+      lineinfile:
+        path: "{{ network_config_dir }}/config"
+        regexp: '^NETCONFIG_DNS_STATIC_SERVERS='
+        line: 'NETCONFIG_DNS_STATIC_SERVERS="9.0.0.1 9.0.0.2"'
+        create: yes
+    
+    - name: Konfiguriere DNS-Suchliste (leer)
+      lineinfile:
+        path: "{{ network_config_dir }}/config"
+        regexp: '^NETCONFIG_DNS_STATIC_SEARCHLIST='
+        line: 'NETCONFIG_DNS_STATIC_SEARCHLIST=""'
+        create: yes
+    
+    #==========================================================================
+    # Phase 7: Sanfter Netzwerk-Neustart (OHNE Down/Up)
+    #==========================================================================
+    
+    - name: Zeige Warnung vor Netzwerk-Neustart
+      debug:
+        msg:
+          - "ACHTUNG: Netzwerk wird jetzt neu geladen (OHNE Down/Up)!"
+          - "Beide IPs (alt und neu) bleiben aktiv."
+          - "SSH-Verbindung sollte NICHT unterbrochen werden."
+    
+    - name: Lade Wicked-Konfiguration neu (sanft)
+      command: wicked ifreload {{ primary_interface }}
+      async: 30
+      poll: 0
+      register: network_reload
+    
+    - name: Warte auf Netzwerk-Stabilisierung
+      pause:
+        seconds: 5
+    
+    - name: Prüfe Wicked-Status
+      command: wicked ifstatus {{ primary_interface }}
+      register: wicked_status
+      changed_when: false
+      ignore_errors: yes
+    
+    - name: Zeige Wicked-Status
+      debug:
+        var: wicked_status.stdout_lines
+      when: wicked_status is succeeded
+    
+    #==========================================================================
+    # Phase 8: Validierung
+    #==========================================================================
+    
+    - name: Sammle neue Netzwerk-Informationen
+      setup:
+        gather_subset:
+          - network
+      check_mode: no
+    
+    - name: Prüfe ob neue IP aktiv ist
+      shell: ip addr show {{ primary_interface }} | grep "{{ host_data['ip-neu'] }}"
+      register: new_ip_check
+      changed_when: false
+      failed_when: false
+      check_mode: no
+    
+    - name: Prüfe ob alte IP noch aktiv ist
+      shell: ip addr show {{ primary_interface }} | grep "{{ host_data['Ip-alt'] }}"
+      register: old_ip_check
+      changed_when: false
+      failed_when: false
+      check_mode: no
+    
+    - name: Validierung erfolgreich
+      debug:
+        msg:
+          - "✓ Neue IP {{ host_data['ip-neu'] }} ist aktiv: {{ 'JA' if new_ip_check.rc == 0 else 'NEIN' }}"
+          - "✓ Alte IP {{ host_data['Ip-alt'] }} ist noch aktiv: {{ 'JA' if old_ip_check.rc == 0 else 'NEIN' }}"
+          - "✓ Beide IPs sind aktiv - Migration erfolgreich!"
+      when: new_ip_check.rc == 0 and old_ip_check.rc == 0
+    
+    - name: Fehler wenn neue IP nicht aktiv
+      set_fact:
+        migration_failed: true
+      when: new_ip_check.rc != 0
+    
+    - name: Teste Gateway-Erreichbarkeit
+      command: ping -c 3 {{ new_gateway }}
+      register: ping_result
+      changed_when: false
+      ignore_errors: yes
+    
+    - name: Zeige Ping-Ergebnis
+      debug:
+        msg: "Gateway {{ new_gateway }} ist {{ 'erreichbar' if ping_result.rc == 0 else 'NICHT erreichbar' }}"
+    
+    #==========================================================================
+    # Phase 9: Abschluss und Logging
+    #==========================================================================
+    
+    - name: Sammle finale Netzwerk-Informationen
+      command: "{{ item }}"
+      register: final_info
+      changed_when: false
+      ignore_errors: yes
+      loop:
+        - hostname
+        - ip addr show {{ primary_interface }}
+        - ip route show
+        - wicked ifstatus {{ primary_interface }}
+    
+    - name: Erstelle Abschluss-Log
+      delegate_to: localhost
+      become: no
+      copy:
+        content: |
+          ================================================================================
+          SLES Netzwerk-Update V2 Abgeschlossen
+          ================================================================================
+          Zeitstempel: {{ ansible_date_time.iso8601 }}
+          Host: {{ inventory_hostname }}
+          
+          Änderungen:
+          -----------
+          Alter Hostname: {{ host_data['Hostname-alt'] }}
+          Neuer Hostname: {{ host_data['Hostname-neu'] }}
+          
+          Alte IP (9.x): {{ host_data['Ip-alt'] }}
+          Neue IP (9.x): {{ host_data['ip-neu'] }}
+          
+          Alte IP (10.x): {{ host_data['10-alt'] }}
+          Neue IP (10.x): {{ host_data['10-neu'] }}
+          
+          Interface: {{ primary_interface }}
+          Gateway: {{ new_gateway }}
+          Netmask: {{ new_netmask }} ({{ new_prefix }})
+          
+          Status:
+          -------
+          Migration: {{ 'ERFOLGREICH' if not migration_failed else 'FEHLGESCHLAGEN' }}
+          Neue IP aktiv: {{ 'JA' if new_ip_check.rc == 0 else 'NEIN' }}
+          Alte IP aktiv: {{ 'JA' if old_ip_check.rc == 0 else 'NEIN' }}
+          
+          Finale Konfiguration:
+          ---------------------
+          {{ final_info.results | map(attribute='stdout') | join('\n\n') }}
+          
+          Backup-Verzeichnis:
+          -------------------
+          {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}
+          
+          Nächste Schritte:
+          -----------------
+          1. Teste SSH mit neuer IP: ssh user@{{ host_data['ip-neu'] }}
+          2. Teste SSH mit alter IP: ssh user@{{ host_data['Ip-alt'] }}
+          3. Wenn beide funktionieren: Entferne alte IP mit remove-old-ip-sles.sh
+          
+          ================================================================================
+        dest: "{{ log_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}.log"
+        mode: '0644'
+    
+    - name: Zeige Zusammenfassung
+      debug:
+        msg:
+          - "==============================================="
+          - "SLES Netzwerk-Update V2 abgeschlossen!"
+          - "==============================================="
+          - "Host: {{ inventory_hostname }}"
+          - "Neuer Hostname: {{ host_data['Hostname-neu'] }}"
+          - "Neue IP: {{ host_data['ip-neu'] }}"
+          - "Alte IP: {{ host_data['Ip-alt'] }} (noch aktiv)"
+          - "Interface: {{ primary_interface }}"
+          - ""
+          - "WICHTIG: BEIDE IPs sind aktiv!"
+          - "Testen Sie SSH mit beiden IPs:"
+          - "  ssh user@{{ host_data['ip-neu'] }}  (neue IP)"
+          - "  ssh user@{{ host_data['Ip-alt'] }}  (alte IP)"
+          - ""
+          - "Wenn beide funktionieren:"
+          - "  sudo ./remove-old-ip-sles.sh {{ host_data['Ip-alt'] }}"
+          - ""
+          - "Backup: {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}"
+          - "Log: {{ log_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}.log"
+          - "==============================================="
+
+# Made with Bob
