@@ -109,22 +109,42 @@
           - "Hostname (short): {{ current_hostname_short_name }}"
           - "Hostname (FQDN): {{ current_hostname_fqdn_name }}"
 
-    - name: Suche passenden Eintrag in CSV (FQDN exakt)
+    - name: Suche passenden Eintrag in CSV (FQDN exakt - alter Hostname)
       set_fact:
         host_config: "{{ csv_data.list | selectattr('Hostname-alt', 'equalto', current_hostname_fqdn_name) | list | first | default({}) }}"
 
-    - name: Debug - Ergebnis FQDN-Suche
+    - name: Debug - Ergebnis FQDN-Suche (alt)
       debug:
-        msg: "FQDN-Suche: {{ 'Gefunden' if host_config != {} else 'Nicht gefunden' }}"
+        msg: "FQDN-Suche (Hostname-alt): {{ 'Gefunden' if host_config != {} else 'Nicht gefunden' }}"
 
-    - name: Suche passenden Eintrag in CSV (short name mit Regex) falls FQDN nicht gefunden
+    - name: Suche passenden Eintrag in CSV (FQDN exakt - neuer Hostname) falls nicht gefunden
+      set_fact:
+        host_config: "{{ csv_data.list | selectattr('Hostname-neu', 'equalto', current_hostname_fqdn_name) | list | first | default({}) }}"
+      when: host_config == {}
+
+    - name: Debug - Ergebnis FQDN-Suche (neu)
+      debug:
+        msg: "FQDN-Suche (Hostname-neu): {{ 'Gefunden' if host_config != {} else 'Nicht gefunden' }}"
+      when: host_config != {}
+
+    - name: Suche passenden Eintrag in CSV (short name mit Regex - alter Hostname) falls FQDN nicht gefunden
       set_fact:
         host_config: "{{ csv_data.list | selectattr('Hostname-alt', 'search', '^' + current_hostname_short_name + '\\.') | list | first | default({}) }}"
       when: host_config == {}
 
-    - name: Debug - Ergebnis Short-Name-Suche
+    - name: Debug - Ergebnis Short-Name-Suche (alt)
       debug:
-        msg: "Short-Name-Suche: {{ 'Gefunden' if host_config != {} else 'Nicht gefunden' }}"
+        msg: "Short-Name-Suche (Hostname-alt): {{ 'Gefunden' if host_config != {} else 'Nicht gefunden' }}"
+      when: host_config != {}
+
+    - name: Suche passenden Eintrag in CSV (short name mit Regex - neuer Hostname) falls nicht gefunden
+      set_fact:
+        host_config: "{{ csv_data.list | selectattr('Hostname-neu', 'search', '^' + current_hostname_short_name + '\\.') | list | first | default({}) }}"
+      when: host_config == {}
+
+    - name: Debug - Ergebnis Short-Name-Suche (neu)
+      debug:
+        msg: "Short-Name-Suche (Hostname-neu): {{ 'Gefunden' if host_config != {} else 'Nicht gefunden' }}"
       when: host_config != {}
 
     - name: Prüfe ob Host in CSV gefunden wurde
