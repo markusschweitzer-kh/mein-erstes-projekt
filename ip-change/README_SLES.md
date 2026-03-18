@@ -255,16 +255,50 @@ sudo wicked ifreload all
 
 ## 🛠️ Verwendung
 
-### Alte IP-Adresse entfernen
+### Cleanup nach erfolgreicher Migration
 
-Nach erfolgreicher Migration können alte IP-Adressen entfernt werden:
+Nach erfolgreicher Migration und SSH-Test sollten Sie die alte Konfiguration bereinigen:
+
+#### Automatisches Cleanup (EMPFOHLEN)
+
+Das Ansible Playbook kopiert automatisch das Cleanup-Script auf das Zielsystem nach `/root/cleanup-old-config-sles.sh`.
 
 ```bash
+# 1. Teste SSH mit neuer IP
+ssh user@9.125.190.62
+
+# 2. Wenn SSH funktioniert, führe Cleanup aus
+sudo /root/cleanup-old-config-sles.sh
+
+# 3. Optional: Dry-Run (zeigt nur an, keine Änderungen)
+sudo /root/cleanup-old-config-sles.sh --dry-run
+
+# 4. Optional: Gateway behalten (nur IP entfernen)
+sudo /root/cleanup-old-config-sles.sh --keep-gateway
+```
+
+**Was wird entfernt:**
+- ✅ Alte IP-Adresse (z.B. 9.155.64.165)
+- ✅ Altes Gateway (z.B. 9.155.64.129) - optional
+- ✅ Alte Einträge in /etc/hosts
+- ✅ Automatisches Backup vor Änderungen
+- ✅ Detaillierte Logs in `/root/logs/cleanup_*.log`
+
+**Empfohlener Zeitplan:**
+1. **Sofort nach Migration:** SSH mit neuer IP testen
+2. **Nach erfolgreichem Test:** Alte IP entfernen
+3. **Nach 1-2 Tagen:** Altes Gateway entfernen (wenn neues stabil läuft)
+
+#### Manuelles Cleanup (Alternative)
+
+Falls Sie einzelne Schritte manuell durchführen möchten:
+
+```bash
+# Alte IP-Adresse entfernen
+sudo ./remove-old-ip-sles.sh 9.155.64.146
+
 # Liste alle konfigurierten IPs
 sudo ./remove-old-ip-sles.sh --list
-
-# Entferne spezifische IP
-sudo ./remove-old-ip-sles.sh 9.155.64.146
 
 # Hilfe anzeigen
 sudo ./remove-old-ip-sles.sh --help
