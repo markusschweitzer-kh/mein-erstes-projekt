@@ -389,28 +389,19 @@
           - "Das ist normal und erwartet."
           - "Warten Sie 30 Sekunden und verbinden Sie sich dann mit der neuen IP."
 
-    - name: Starte Netzwerkinterfaces neu (NetworkManager) - Asynchron
+    - name: Starte Netzwerkinterfaces neu (NetworkManager) - Synchron
       shell: |
-        sleep 2
         nmcli connection reload
-        nmcli connection down "{{ item }}" || true
-        nmcli connection up "{{ item }}" || true
+        nmcli device reapply "{{ item }}" || nmcli connection up "{{ item }}" || true
       loop: "{{ interfaces_to_restart }}"
       when: nm_status.status.ActiveState == "active"
-      async: 30
-      poll: 0
       register: nm_restart
       failed_when: false
 
-    - name: Starte Netzwerkinterfaces neu (network service) - Asynchron
+    - name: Starte Netzwerkinterfaces neu (network service) - Synchron
       shell: |
-        sleep 2
-        ifdown {{ item }} || true
-        ifup {{ item }} || true
-      loop: "{{ interfaces_to_restart }}"
+        systemctl restart network
       when: nm_status.status.ActiveState != "active"
-      async: 30
-      poll: 0
       register: network_restart
       failed_when: false
 
