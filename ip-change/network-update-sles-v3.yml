@@ -56,7 +56,7 @@
       read_csv:
         path: "{{ csv_file }}"
         delimiter: ';'
-        key: Hostname-alt
+        skipinitialspace: yes
       register: csv_data
       run_once: true
     
@@ -68,24 +68,28 @@
       set_fact:
         current_hostname: "{{ ansible_fqdn if ansible_fqdn != 'localhost' else ansible_hostname }}"
     
-    - name: Suche Host in CSV-Daten
+    - name: Suche Host in CSV-Daten (FQDN exakt)
       set_fact:
-        host_data: "{{ csv_data.dict[current_hostname] | default(none) }}"
+        host_data: "{{ csv_data.list | selectattr('Hostname-alt', 'equalto', current_hostname) | list | first | default({}) }}"
     
     - name: Fallback - Suche mit ansible_hostname
       set_fact:
-        host_data: "{{ csv_data.dict[ansible_hostname] | default(none) }}"
-      when: host_data is none
+        host_data: "{{ csv_data.list | selectattr('Hostname-alt', 'equalto', ansible_hostname) | list | first | default({}) }}"
+      when: host_data == {}
     
-    - name: Fallback - Suche mit Kurzname
+    - name: Fallback - Suche mit Kurzname (Regex)
       set_fact:
-        host_data: "{{ csv_data.dict[ansible_hostname.split('.')[0]] | default(none) }}"
-      when: host_data is none
+        host_data: "{{ csv_data.list | selectattr('Hostname-alt', 'search', '^' + ansible_hostname.split('.')[0] + '\\.') | list | first | default({}) }}"
+      when: host_data == {}
     
     - name: Fehler wenn Host nicht in CSV gefunden
       fail:
-        msg: "Host '{{ current_hostname }}' nicht in CSV-Datei gefunden!"
-      when: host_data is none
+        msg: |
+          Host '{{ current_hostname }}' nicht in CSV-Datei gefunden!
+          
+          Verfügbare Hostnamen in CSV:
+          {{ csv_data.list | map(attribute='Hostname-alt') | list | join('\n') }}
+      when: host_data == {}
     
     - name: Zeige gefundene Host-Daten
       debug:
