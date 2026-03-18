@@ -239,7 +239,7 @@
     - name: Erstelle Routing-Konfiguration (DUAL Gateway)
       copy:
         content: |
-          # {{ ansible_managed }}
+          # Ansible managed - Generated on {{ ansible_date_time.iso8601 }}
           # Routing-Konfiguration
           # Altes Gateway: {{ old_gateway }}
           # Neues Gateway: {{ new_gateway }}
@@ -441,7 +441,7 @@
           - "Verwendung nach erfolgreicher Migration:"
           - ""
           - "1. Teste SSH mit neuer IP:"
-          - "   ssh {{ host_data['Ip-neu'] }}"
+          - "   ssh {{ host_data['ip-neu'] }}"
           - ""
           - "2. Wenn SSH funktioniert, führe Cleanup aus:"
           - "   sudo /root/cleanup-old-config-sles.sh"
