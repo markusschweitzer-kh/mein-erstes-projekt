@@ -175,8 +175,6 @@
         cp {{ network_config_dir }}/ifcfg-{{ primary_interface }} {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}/ifcfg-{{ primary_interface }} 2>/dev/null || true
         cp {{ network_config_dir }}/routes {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}/routes 2>/dev/null || true
         cp {{ network_config_dir }}/config {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.epoch }}/config 2>/dev/null || true
-      args:
-        warn: false
       changed_when: false
     
     #==========================================================================
