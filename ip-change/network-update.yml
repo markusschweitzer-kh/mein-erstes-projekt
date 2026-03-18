@@ -271,20 +271,22 @@
         - name: Prüfe 9.x IP
           assert:
             that:
-              - current_ip_9x == host_config['Ip-alt']
+              - current_ip_9x == host_config['Ip-alt'] or current_ip_9x == host_config['ip-neu']
             fail_msg: |
               FEHLER: 9.x IP stimmt nicht überein!
-              Erwartet: {{ host_config['Ip-alt'] }}
+              Erwartet (alt): {{ host_config['Ip-alt'] }}
+              Erwartet (neu): {{ host_config['ip-neu'] }}
               Gefunden: {{ current_ip_9x }}
             success_msg: "9.x IP validiert: {{ current_ip_9x }}"
 
         - name: Prüfe 10.x IP (falls konfiguriert)
           assert:
             that:
-              - current_ip_10x == host_config['10-alt'] or current_ip_10x == 'nicht konfiguriert'
+              - current_ip_10x == host_config['10-alt'] or current_ip_10x == host_config['10-neu'] or current_ip_10x == 'nicht konfiguriert'
             fail_msg: |
               FEHLER: 10.x IP stimmt nicht überein!
-              Erwartet: {{ host_config['10-alt'] }}
+              Erwartet (alt): {{ host_config['10-alt'] }}
+              Erwartet (neu): {{ host_config['10-neu'] }}
               Gefunden: {{ current_ip_10x }}
             success_msg: "10.x IP validiert: {{ current_ip_10x }}"
           
