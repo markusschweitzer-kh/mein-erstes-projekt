@@ -198,8 +198,30 @@
         - interface_10x is not defined
         - item.split()[1] | regex_search('^10\\.10\\.')
       loop: "{{ interfaces_info }}"
+    
+    - name: Suche nach Interface OHNE IP (für neue 10.x IP)
+      shell: |
+        for iface in $(ls /sys/class/net/ | grep -E '^(eth|ens|enp)'); do
+          if ! ip addr show $iface | grep -q 'inet '; then
+            echo $iface
+            exit 0
+          fi
+        done
+      register: unused_interface
+      changed_when: false
+      failed_when: false
+      when: interface_10x is not defined
+    
+    - name: Verwende ungenutztes Interface für 10.x IP
+      set_fact:
+        interface_10x: "{{ unused_interface.stdout }}"
+        current_ip_10x: "nicht konfiguriert"
+      when:
+        - interface_10x is not defined
+        - unused_interface.stdout is defined
+        - unused_interface.stdout != ""
 
-    - name: Setze 10.x Interface auf 9.x Interface falls nicht gefunden (beide IPs auf einem Interface)
+    - name: Fallback - Setze 10.x Interface auf 9.x Interface (beide IPs auf einem Interface)
       set_fact:
         interface_10x: "{{ interface_9x }}"
         current_ip_10x: "nicht konfiguriert"
