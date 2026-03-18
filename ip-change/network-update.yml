@@ -342,7 +342,7 @@
           vars:
             device: "{{ interface_10x }}"
             ipaddr: "{{ host_config['10-neu'] }}"
-            netmask: "{{ new_netmask }}"
+            netmask: "255.255.255.0"
             gateway: ""
             is_primary: no
           when: interface_9x != interface_10x
@@ -358,7 +358,7 @@
           vars:
             device: "{{ interface_9x }}:0"
             ipaddr: "{{ host_config['10-neu'] }}"
-            netmask: "{{ new_netmask }}"
+            netmask: "255.255.255.0"
             gateway: ""
             is_primary: no
           when: interface_9x == interface_10x
