@@ -68,18 +68,33 @@
       set_fact:
         current_hostname: "{{ ansible_fqdn if ansible_fqdn != 'localhost' else ansible_hostname }}"
     
-    - name: Suche Host in CSV-Daten (FQDN exakt)
+    - name: Suche Host in CSV-Daten (FQDN exakt - alter Hostname)
       set_fact:
         host_data: "{{ csv_data.list | selectattr('Hostname-alt', 'equalto', current_hostname) | list | first | default({}) }}"
     
-    - name: Fallback - Suche mit ansible_hostname
+    - name: Fallback - Suche mit NEUEM Hostname (falls bereits migriert)
+      set_fact:
+        host_data: "{{ csv_data.list | selectattr('Hostname-neu', 'equalto', current_hostname) | list | first | default({}) }}"
+      when: host_data == {}
+    
+    - name: Fallback - Suche mit ansible_hostname (alter Hostname)
       set_fact:
         host_data: "{{ csv_data.list | selectattr('Hostname-alt', 'equalto', ansible_hostname) | list | first | default({}) }}"
       when: host_data == {}
     
-    - name: Fallback - Suche mit Kurzname (Regex)
+    - name: Fallback - Suche mit ansible_hostname (neuer Hostname)
+      set_fact:
+        host_data: "{{ csv_data.list | selectattr('Hostname-neu', 'equalto', ansible_hostname) | list | first | default({}) }}"
+      when: host_data == {}
+    
+    - name: Fallback - Suche mit Kurzname (Regex - alter Hostname)
       set_fact:
         host_data: "{{ csv_data.list | selectattr('Hostname-alt', 'search', '^' + ansible_hostname.split('.')[0] + '\\.') | list | first | default({}) }}"
+      when: host_data == {}
+    
+    - name: Fallback - Suche mit Kurzname (Regex - neuer Hostname)
+      set_fact:
+        host_data: "{{ csv_data.list | selectattr('Hostname-neu', 'search', '^' + ansible_hostname.split('.')[0] + '\\.') | list | first | default({}) }}"
       when: host_data == {}
     
     - name: Fehler wenn Host nicht in CSV gefunden
