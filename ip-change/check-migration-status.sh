@@ -153,8 +153,14 @@ print_section "Prüfe Hosts"
 # Zähler für Fortschritt
 host_counter=0
 
-# Überspringe Header-Zeile und verwende process substitution statt pipe
-while IFS=';' read -r hostname_alt hostname_neu ip_alt ip_neu ip_10_alt ip_10_neu; do
+# Lese CSV in Array
+mapfile -t csv_lines < <(tail -n +2 "$CSV_FILE")
+
+# Durchlaufe alle Zeilen
+for line in "${csv_lines[@]}"; do
+    # Parse CSV-Zeile
+    IFS=';' read -r hostname_alt hostname_neu ip_alt ip_neu ip_10_alt ip_10_neu <<< "$line"
+    
     # Entferne Whitespace
     hostname_alt=$(echo "$hostname_alt" | tr -d '[:space:]')
     hostname_neu=$(echo "$hostname_neu" | tr -d '[:space:]')
@@ -169,14 +175,12 @@ while IFS=';' read -r hostname_alt hostname_neu ip_alt ip_neu ip_10_alt ip_10_ne
     fi
     
     host_counter=$((host_counter + 1))
-    echo -e "${CYAN}[$host_counter/16]${NC}"
+    echo -e "${CYAN}[$host_counter/${#csv_lines[@]}]${NC}"
     
     # Prüfe Host (mit error handling)
-    if ! check_host "$hostname_alt" "$hostname_neu" "$ip_alt" "$ip_neu" "$ip_10_alt" "$ip_10_neu"; then
-        echo -e "${RED}Fehler bei Host $hostname_alt${NC}"
-    fi
+    check_host "$hostname_alt" "$hostname_neu" "$ip_alt" "$ip_neu" "$ip_10_alt" "$ip_10_neu" || true
     echo ""
-done < <(tail -n +2 "$CSV_FILE")
+done
 
 #==============================================================================
 # ZUSAMMENFASSUNG
