@@ -75,7 +75,7 @@ check_host() {
     if [ -z "$reachable_ip" ]; then
         echo -e "${RED}✗${NC} ${hostname_alt} - NICHT ERREICHBAR (${ip_alt} / ${ip_neu})"
         HOSTS_UNREACHABLE+=("$hostname_alt|$ip_alt|$ip_neu|UNREACHABLE|UNREACHABLE|UNREACHABLE")
-        return
+        return 0
     fi
     
     # Prüfe 10.x IP
@@ -150,6 +150,9 @@ echo ""
 # Lese CSV und prüfe jeden Host
 print_section "Prüfe Hosts"
 
+# Zähler für Fortschritt
+host_counter=0
+
 # Überspringe Header-Zeile und verwende process substitution statt pipe
 while IFS=';' read -r hostname_alt hostname_neu ip_alt ip_neu ip_10_alt ip_10_neu; do
     # Entferne Whitespace
@@ -165,7 +168,13 @@ while IFS=';' read -r hostname_alt hostname_neu ip_alt ip_neu ip_10_alt ip_10_ne
         continue
     fi
     
-    check_host "$hostname_alt" "$hostname_neu" "$ip_alt" "$ip_neu" "$ip_10_alt" "$ip_10_neu"
+    host_counter=$((host_counter + 1))
+    echo -e "${CYAN}[$host_counter/16]${NC}"
+    
+    # Prüfe Host (mit error handling)
+    if ! check_host "$hostname_alt" "$hostname_neu" "$ip_alt" "$ip_neu" "$ip_10_alt" "$ip_10_neu"; then
+        echo -e "${RED}Fehler bei Host $hostname_alt${NC}"
+    fi
     echo ""
 done < <(tail -n +2 "$CSV_FILE")
 
