@@ -11,7 +11,7 @@
 
 - name: Sammle Netzwerk-Status von allen Hosts
   hosts: localhost
-  gather_facts: no
+  gather_facts: yes
   
   vars:
     csv_file: "ip-change.csv"
