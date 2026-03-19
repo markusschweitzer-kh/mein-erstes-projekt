@@ -10,7 +10,7 @@
 # Beispiel: ./check-migration-status.sh ip-change.csv
 #==============================================================================
 
-set -euo pipefail
+set -eo pipefail
 
 # Farben
 RED='\033[0;31m'
@@ -150,8 +150,8 @@ echo ""
 # Lese CSV und prüfe jeden Host
 print_section "Prüfe Hosts"
 
-# Überspringe Header-Zeile
-tail -n +2 "$CSV_FILE" | while IFS=';' read -r hostname_alt hostname_neu ip_alt ip_neu ip_10_alt ip_10_neu; do
+# Überspringe Header-Zeile und verwende process substitution statt pipe
+while IFS=';' read -r hostname_alt hostname_neu ip_alt ip_neu ip_10_alt ip_10_neu; do
     # Entferne Whitespace
     hostname_alt=$(echo "$hostname_alt" | tr -d '[:space:]')
     hostname_neu=$(echo "$hostname_neu" | tr -d '[:space:]')
@@ -167,7 +167,7 @@ tail -n +2 "$CSV_FILE" | while IFS=';' read -r hostname_alt hostname_neu ip_alt 
     
     check_host "$hostname_alt" "$hostname_neu" "$ip_alt" "$ip_neu" "$ip_10_alt" "$ip_10_neu"
     echo ""
-done
+done < <(tail -n +2 "$CSV_FILE")
 
 #==============================================================================
 # ZUSAMMENFASSUNG
