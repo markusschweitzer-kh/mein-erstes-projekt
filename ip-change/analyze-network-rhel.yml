@@ -1,0 +1,388 @@
+---
+#==============================================================================
+# RHEL/Oracle Linux Netzwerk-Analyse Playbook
+#==============================================================================
+# Beschreibung: Sammelt detaillierte Netzwerk-Informationen zur Diagnose
+# Autor: Ansible Automation
+# Datum: 2026-03-19
+# 
+# Zweck: Identifiziert Probleme bei der IP-Migration
+#==============================================================================
+
+- name: RHEL/Oracle Linux Netzwerk-Analyse
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    csv_file: "ip-change.csv"
+    analysis_dir: "/tmp/network-analysis-{{ ansible_date_time.epoch }}"
+    
+  tasks:
+    #==========================================================================
+    # INITIALISIERUNG
+    #==========================================================================
+    
+    - name: Erstelle Analyse-Verzeichnis
+      file:
+        path: "{{ analysis_dir }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Starte Analyse-Report
+      copy:
+        content: |
+          ================================================================================
+          RHEL/Oracle Linux Netzwerk-Analyse Report
+          ================================================================================
+          Zeitstempel: {{ ansible_date_time.iso8601 }}
+          Host: {{ ansible_hostname }}
+          FQDN: {{ ansible_fqdn }}
+          IP: {{ ansible_default_ipv4.address | default('N/A') }}
+          ================================================================================
+          
+        dest: "{{ analysis_dir }}/analysis-report.txt"
+        mode: '0644'
+    
+    #==========================================================================
+    # SYSTEM-INFORMATIONEN
+    #==========================================================================
+    
+    - name: Sammle System-Informationen
+      shell: |
+        echo "=== SYSTEM-INFORMATIONEN ===" >> {{ analysis_dir }}/analysis-report.txt
+        echo "OS: $(cat /etc/redhat-release)" >> {{ analysis_dir }}/analysis-report.txt
+        echo "Kernel: $(uname -r)" >> {{ analysis_dir }}/analysis-report.txt
+        echo "Architektur: $(uname -m)" >> {{ analysis_dir }}/analysis-report.txt
+        echo "Hostname (short): $(hostname -s)" >> {{ analysis_dir }}/analysis-report.txt
+        echo "Hostname (FQDN): $(hostname -f)" >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+    
+    #==========================================================================
+    # NETZWERK-MANAGER STATUS
+    #==========================================================================
+    
+    - name: Prüfe NetworkManager Status
+      systemd:
+        name: NetworkManager
+      register: nm_status
+      failed_when: false
+    
+    - name: Sammle NetworkManager Informationen
+      shell: |
+        echo "=== NETWORKMANAGER STATUS ===" >> {{ analysis_dir }}/analysis-report.txt
+        echo "Status: {{ nm_status.status.ActiveState | default('nicht installiert') }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "Enabled: {{ nm_status.status.UnitFileState | default('N/A') }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+    
+    - name: Sammle NetworkManager Connections
+      shell: |
+        echo "=== NETWORKMANAGER CONNECTIONS ===" >> {{ analysis_dir }}/analysis-report.txt
+        nmcli connection show >> {{ analysis_dir }}/analysis-report.txt 2>&1 || echo "nmcli nicht verfügbar" >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+      failed_when: false
+    
+    - name: Sammle NetworkManager Devices
+      shell: |
+        echo "=== NETWORKMANAGER DEVICES ===" >> {{ analysis_dir }}/analysis-report.txt
+        nmcli device status >> {{ analysis_dir }}/analysis-report.txt 2>&1 || echo "nmcli nicht verfügbar" >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+      failed_when: false
+    
+    #==========================================================================
+    # NETZWERK-INTERFACES
+    #==========================================================================
+    
+    - name: Sammle alle Netzwerk-Interfaces (ip addr)
+      shell: |
+        echo "=== NETZWERK-INTERFACES (ip addr) ===" >> {{ analysis_dir }}/analysis-report.txt
+        ip addr show >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+    
+    - name: Sammle Netzwerk-Interfaces (ip link)
+      shell: |
+        echo "=== NETZWERK-INTERFACES (ip link) ===" >> {{ analysis_dir }}/analysis-report.txt
+        ip link show >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+    
+    - name: Sammle Interface-Details
+      shell: |
+        echo "=== INTERFACE-DETAILS ===" >> {{ analysis_dir }}/analysis-report.txt
+        for iface in $(ls /sys/class/net/ | grep -E '^(eth|ens|enp)'); do
+          echo "Interface: $iface" >> {{ analysis_dir }}/analysis-report.txt
+          echo "  Status: $(cat /sys/class/net/$iface/operstate 2>/dev/null || echo 'unknown')" >> {{ analysis_dir }}/analysis-report.txt
+          echo "  MAC: $(cat /sys/class/net/$iface/address 2>/dev/null || echo 'unknown')" >> {{ analysis_dir }}/analysis-report.txt
+          echo "  Driver: $(readlink /sys/class/net/$iface/device/driver 2>/dev/null | xargs basename || echo 'unknown')" >> {{ analysis_dir }}/analysis-report.txt
+          echo "  IPs: $(ip -o addr show $iface | grep -E 'inet ' | awk '{print $4}' | tr '\n' ' ')" >> {{ analysis_dir }}/analysis-report.txt
+          echo "" >> {{ analysis_dir }}/analysis-report.txt
+        done
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+    
+    #==========================================================================
+    # ROUTING
+    #==========================================================================
+    
+    - name: Sammle Routing-Tabelle
+      shell: |
+        echo "=== ROUTING-TABELLE ===" >> {{ analysis_dir }}/analysis-report.txt
+        ip route show >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+    
+    - name: Sammle Default Gateway
+      shell: |
+        echo "=== DEFAULT GATEWAY ===" >> {{ analysis_dir }}/analysis-report.txt
+        ip route show default >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+    
+    #==========================================================================
+    # IFCFG-DATEIEN
+    #==========================================================================
+    
+    - name: Finde alle ifcfg-Dateien
+      find:
+        paths: /etc/sysconfig/network-scripts/
+        patterns: 'ifcfg-*'
+        excludes: 'ifcfg-lo'
+      register: ifcfg_files
+    
+    - name: Sammle ifcfg-Dateien Inhalt
+      shell: |
+        echo "=== IFCFG-DATEIEN ===" >> {{ analysis_dir }}/analysis-report.txt
+        for file in {{ ifcfg_files.files | map(attribute='path') | join(' ') }}; do
+          echo "Datei: $file" >> {{ analysis_dir }}/analysis-report.txt
+          cat "$file" >> {{ analysis_dir }}/analysis-report.txt
+          echo "" >> {{ analysis_dir }}/analysis-report.txt
+        done
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+      when: ifcfg_files.files | length > 0
+    
+    - name: Kopiere ifcfg-Dateien ins Analyse-Verzeichnis
+      copy:
+        src: "{{ item.path }}"
+        dest: "{{ analysis_dir }}/"
+        remote_src: yes
+      loop: "{{ ifcfg_files.files }}"
+      when: ifcfg_files.files | length > 0
+    
+    #==========================================================================
+    # DNS-KONFIGURATION
+    #==========================================================================
+    
+    - name: Sammle DNS-Konfiguration
+      shell: |
+        echo "=== DNS-KONFIGURATION ===" >> {{ analysis_dir }}/analysis-report.txt
+        echo "--- /etc/resolv.conf ---" >> {{ analysis_dir }}/analysis-report.txt
+        cat /etc/resolv.conf >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+    
+    #==========================================================================
+    # CSV-ANALYSE
+    #==========================================================================
+    
+    - name: Lade CSV-Datei
+      read_csv:
+        path: "{{ csv_file }}"
+        delimiter: ';'
+      delegate_to: localhost
+      register: csv_data
+      become: no
+      failed_when: false
+    
+    - name: Sammle aktuelle IPs
+      shell: |
+        ip -o addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print $4}' | cut -d'/' -f1
+      register: current_ips
+      changed_when: false
+    
+    - name: Analysiere CSV-Zuordnung
+      shell: |
+        echo "=== CSV-ANALYSE ===" >> {{ analysis_dir }}/analysis-report.txt
+        echo "Aktuelle IPs auf dem System:" >> {{ analysis_dir }}/analysis-report.txt
+        echo "{{ current_ips.stdout }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+      when: csv_data is defined
+    
+    - name: Suche System in CSV
+      set_fact:
+        host_config: "{{ csv_data.list | selectattr('Ip-alt', 'in', current_ips.stdout_lines) | list | first | default({}) }}"
+      when: csv_data is defined and csv_data.list is defined
+    
+    - name: Suche in CSV (alternative Methoden)
+      set_fact:
+        host_config_by_new_9x: "{{ csv_data.list | selectattr('ip-neu', 'in', current_ips.stdout_lines) | list | first | default({}) }}"
+        host_config_by_old_10x: "{{ csv_data.list | selectattr('10-alt', 'in', current_ips.stdout_lines) | list | first | default({}) }}"
+        host_config_by_new_10x: "{{ csv_data.list | selectattr('10-neu', 'in', current_ips.stdout_lines) | list | first | default({}) }}"
+      when: csv_data is defined and csv_data.list is defined
+    
+    - name: Schreibe CSV-Zuordnung
+      shell: |
+        echo "CSV-Zuordnung gefunden:" >> {{ analysis_dir }}/analysis-report.txt
+        echo "  Via 9.x alt: {{ 'JA' if host_config != {} else 'NEIN' }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "  Via 9.x neu: {{ 'JA' if host_config_by_new_9x != {} else 'NEIN' }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "  Via 10.x alt: {{ 'JA' if host_config_by_old_10x != {} else 'NEIN' }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "  Via 10.x neu: {{ 'JA' if host_config_by_new_10x != {} else 'NEIN' }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+      when: csv_data is defined
+    
+    - name: Schreibe gefundene CSV-Konfiguration
+      shell: |
+        echo "Gefundene CSV-Konfiguration:" >> {{ analysis_dir }}/analysis-report.txt
+        echo "  Hostname-alt: {{ host_config['Hostname-alt'] | default('NICHT GEFUNDEN') }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "  Hostname-neu: {{ host_config['Hostname-neu'] | default('NICHT GEFUNDEN') }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "  9.x IP-alt: {{ host_config['Ip-alt'] | default('NICHT GEFUNDEN') }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "  9.x IP-neu: {{ host_config['ip-neu'] | default('NICHT GEFUNDEN') }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "  10.x IP-alt: {{ host_config['10-alt'] | default('NICHT GEFUNDEN') }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "  10.x IP-neu: {{ host_config['10-neu'] | default('NICHT GEFUNDEN') }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+      when: csv_data is defined and host_config != {}
+    
+    #==========================================================================
+    # FIREWALL
+    #==========================================================================
+    
+    - name: Prüfe Firewall Status
+      systemd:
+        name: firewalld
+      register: firewall_status
+      failed_when: false
+    
+    - name: Sammle Firewall-Informationen
+      shell: |
+        echo "=== FIREWALL ===" >> {{ analysis_dir }}/analysis-report.txt
+        echo "Status: {{ firewall_status.status.ActiveState | default('nicht installiert') }}" >> {{ analysis_dir }}/analysis-report.txt
+        if systemctl is-active --quiet firewalld; then
+          echo "Zones:" >> {{ analysis_dir }}/analysis-report.txt
+          firewall-cmd --get-active-zones >> {{ analysis_dir }}/analysis-report.txt 2>&1 || true
+        fi
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+      failed_when: false
+    
+    #==========================================================================
+    # SELINUX
+    #==========================================================================
+    
+    - name: Sammle SELinux Status
+      shell: |
+        echo "=== SELINUX ===" >> {{ analysis_dir }}/analysis-report.txt
+        echo "Status: $(getenforce 2>/dev/null || echo 'nicht verfügbar')" >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+      failed_when: false
+    
+    #==========================================================================
+    # SYSTEMD-NETWORKD (falls verwendet)
+    #==========================================================================
+    
+    - name: Prüfe systemd-networkd
+      systemd:
+        name: systemd-networkd
+      register: networkd_status
+      failed_when: false
+    
+    - name: Sammle systemd-networkd Informationen
+      shell: |
+        echo "=== SYSTEMD-NETWORKD ===" >> {{ analysis_dir }}/analysis-report.txt
+        echo "Status: {{ networkd_status.status.ActiveState | default('nicht installiert') }}" >> {{ analysis_dir }}/analysis-report.txt
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+    
+    #==========================================================================
+    # PROBLEME IDENTIFIZIEREN
+    #==========================================================================
+    
+    - name: Analysiere potenzielle Probleme
+      shell: |
+        echo "=== POTENZIELLE PROBLEME ===" >> {{ analysis_dir }}/analysis-report.txt
+        
+        # Prüfe NetworkManager
+        if ! systemctl is-active --quiet NetworkManager; then
+          echo "⚠ NetworkManager ist nicht aktiv!" >> {{ analysis_dir }}/analysis-report.txt
+        fi
+        
+        # Prüfe ob mehrere Netzwerk-Manager laufen
+        if systemctl is-active --quiet NetworkManager && systemctl is-active --quiet systemd-networkd; then
+          echo "⚠ Mehrere Netzwerk-Manager aktiv (NetworkManager + systemd-networkd)!" >> {{ analysis_dir }}/analysis-report.txt
+        fi
+        
+        # Prüfe auf doppelte IPs
+        DUPLICATE_IPS=$(ip -o addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print $4}' | cut -d'/' -f1 | sort | uniq -d)
+        if [ -n "$DUPLICATE_IPS" ]; then
+          echo "⚠ Doppelte IP-Adressen gefunden: $DUPLICATE_IPS" >> {{ analysis_dir }}/analysis-report.txt
+        fi
+        
+        # Prüfe auf Interfaces ohne IP
+        for iface in $(ls /sys/class/net/ | grep -E '^(eth|ens|enp)'); do
+          if [ "$(cat /sys/class/net/$iface/operstate)" = "up" ]; then
+            if ! ip addr show $iface | grep -q 'inet '; then
+              echo "⚠ Interface $iface ist UP aber hat keine IP" >> {{ analysis_dir }}/analysis-report.txt
+            fi
+          fi
+        done
+        
+        # Prüfe auf fehlende ifcfg-Dateien
+        for iface in $(ls /sys/class/net/ | grep -E '^(eth|ens|enp)'); do
+          if [ ! -f "/etc/sysconfig/network-scripts/ifcfg-$iface" ]; then
+            echo "⚠ Keine ifcfg-Datei für Interface $iface" >> {{ analysis_dir }}/analysis-report.txt
+          fi
+        done
+        
+        # Prüfe auf BOOTPROTO=dhcp
+        for file in /etc/sysconfig/network-scripts/ifcfg-*; do
+          if [ -f "$file" ] && grep -q "BOOTPROTO=dhcp" "$file"; then
+            echo "⚠ DHCP konfiguriert in $(basename $file)" >> {{ analysis_dir }}/analysis-report.txt
+          fi
+        done
+        
+        echo "" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+    
+    #==========================================================================
+    # ABSCHLUSS
+    #==========================================================================
+    
+    - name: Erstelle Zusammenfassung
+      shell: |
+        echo "=================================================================================" >> {{ analysis_dir }}/analysis-report.txt
+        echo "ANALYSE ABGESCHLOSSEN" >> {{ analysis_dir }}/analysis-report.txt
+        echo "=================================================================================" >> {{ analysis_dir }}/analysis-report.txt
+        echo "Report: {{ analysis_dir }}/analysis-report.txt" >> {{ analysis_dir }}/analysis-report.txt
+        echo "Zeitstempel: $(date +'%Y-%m-%d %H:%M:%S')" >> {{ analysis_dir }}/analysis-report.txt
+        echo "=================================================================================" >> {{ analysis_dir }}/analysis-report.txt
+      changed_when: false
+    
+    - name: Hole Report zurück zum Ansible Controller
+      fetch:
+        src: "{{ analysis_dir }}/analysis-report.txt"
+        dest: "./network-analysis-{{ inventory_hostname }}.txt"
+        flat: yes
+    
+    - name: Zeige Report-Pfad
+      debug:
+        msg:
+          - "=== ANALYSE ABGESCHLOSSEN ==="
+          - "Report auf Zielsystem: {{ analysis_dir }}/analysis-report.txt"
+          - "Report auf Controller: ./network-analysis-{{ inventory_hostname }}.txt"
+          - ""
+          - "Bitte Report prüfen und nach folgenden Problemen suchen:"
+          - "  - NetworkManager Status"
+          - "  - Fehlende/falsche ifcfg-Dateien"
+          - "  - Doppelte IP-Adressen"
+          - "  - Interfaces ohne IP"
+          - "  - DHCP-Konfiguration"
+
+# Made with Bob
