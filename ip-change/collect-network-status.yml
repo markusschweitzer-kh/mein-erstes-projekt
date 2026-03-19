@@ -1,0 +1,183 @@
+---
+#==============================================================================
+# Netzwerk-Status Sammler
+#==============================================================================
+# Beschreibung: Sammelt Netzwerk-Konfiguration von allen Hosts aus CSV
+# Autor: Ansible Automation
+# Datum: 2026-03-19
+#
+# Verwendung: ansible-playbook collect-network-status.yml
+#==============================================================================
+
+- name: Sammle Netzwerk-Status von allen Hosts
+  hosts: localhost
+  gather_facts: no
+  
+  vars:
+    csv_file: "ip-change.csv"
+    output_file: "network-status-report-{{ ansible_date_time.epoch }}.txt"
+    
+  tasks:
+    #==========================================================================
+    # CSV LADEN
+    #==========================================================================
+    
+    - name: Lade CSV-Datei
+      read_csv:
+        path: "{{ csv_file }}"
+        delimiter: ';'
+      register: csv_data
+    
+    - name: Erstelle Host-Liste (alte IPs)
+      set_fact:
+        host_list_old: "{{ csv_data.list | map(attribute='Ip-alt') | list }}"
+    
+    - name: Erstelle Host-Liste (neue IPs)
+      set_fact:
+        host_list_new: "{{ csv_data.list | map(attribute='ip-neu') | list }}"
+    
+    - name: Kombiniere Host-Listen
+      set_fact:
+        all_hosts: "{{ host_list_old + host_list_new }}"
+    
+    - name: Erstelle Report-Header
+      copy:
+        content: |
+          ================================================================================
+          NETZWERK-STATUS REPORT
+          ================================================================================
+          Erstellt: {{ ansible_date_time.iso8601 }}
+          Anzahl Hosts in CSV: {{ csv_data.list | length }}
+          ================================================================================
+          
+        dest: "{{ output_file }}"
+    
+    #==========================================================================
+    # SAMMLE STATUS VON JEDEM HOST
+    #==========================================================================
+    
+    - name: Sammle Netzwerk-Status von allen Hosts
+      block:
+        - name: Teste Erreichbarkeit und sammle Daten
+          shell: |
+            # Funktion zum Testen eines Hosts
+            test_host() {
+              local ip="$1"
+              local hostname_alt="$2"
+              local hostname_neu="$3"
+              local ip_neu="$4"
+              local ip_10_alt="$5"
+              local ip_10_neu="$6"
+              
+              echo "=== HOST: $hostname_alt ===" >> {{ output_file }}
+              echo "Alte IP: $ip" >> {{ output_file }}
+              echo "Neue IP: $ip_neu" >> {{ output_file }}
+              
+              # Teste alte IP
+              if ping -c 1 -W 2 "$ip" >/dev/null 2>&1; then
+                echo "Status: ERREICHBAR (alte IP)" >> {{ output_file }}
+                
+                # Sammle Daten via SSH
+                if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" "hostname" >/dev/null 2>&1; then
+                  echo "" >> {{ output_file }}
+                  echo "--- Hostname ---" >> {{ output_file }}
+                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" "hostname -f" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
+                  
+                  echo "" >> {{ output_file }}
+                  echo "--- IP-Adressen ---" >> {{ output_file }}
+                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" "ip -o addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print \$2, \$4}'" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
+                  
+                  echo "" >> {{ output_file }}
+                  echo "--- Default Gateway ---" >> {{ output_file }}
+                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" "ip route show default" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
+                else
+                  echo "SSH: NICHT ERREICHBAR" >> {{ output_file }}
+                fi
+              
+              # Teste neue IP falls alte nicht erreichbar
+              elif ping -c 1 -W 2 "$ip_neu" >/dev/null 2>&1; then
+                echo "Status: ERREICHBAR (neue IP)" >> {{ output_file }}
+                
+                # Sammle Daten via SSH
+                if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip_neu" "hostname" >/dev/null 2>&1; then
+                  echo "" >> {{ output_file }}
+                  echo "--- Hostname ---" >> {{ output_file }}
+                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip_neu" "hostname -f" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
+                  
+                  echo "" >> {{ output_file }}
+                  echo "--- IP-Adressen ---" >> {{ output_file }}
+                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip_neu" "ip -o addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print \$2, \$4}'" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
+                  
+                  echo "" >> {{ output_file }}
+                  echo "--- Default Gateway ---" >> {{ output_file }}
+                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip_neu" "ip route show default" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
+                else
+                  echo "SSH: NICHT ERREICHBAR" >> {{ output_file }}
+                fi
+              
+              else
+                echo "Status: NICHT ERREICHBAR (beide IPs)" >> {{ output_file }}
+              fi
+              
+              echo "" >> {{ output_file }}
+              echo "--------------------------------------------------------------------------------" >> {{ output_file }}
+              echo "" >> {{ output_file }}
+            }
+            
+            # Durchlaufe alle Hosts aus CSV
+            {% for host in csv_data.list %}
+            test_host "{{ host['Ip-alt'] }}" "{{ host['Hostname-alt'] }}" "{{ host['Hostname-neu'] }}" "{{ host['ip-neu'] }}" "{{ host['10-alt'] }}" "{{ host['10-neu'] }}"
+            {% endfor %}
+          args:
+            executable: /bin/bash
+          delegate_to: localhost
+      
+    #==========================================================================
+    # ERSTELLE ZUSAMMENFASSUNG
+    #==========================================================================
+    
+    - name: Erstelle Zusammenfassung
+      shell: |
+        echo "" >> {{ output_file }}
+        echo "================================================================================" >> {{ output_file }}
+        echo "ZUSAMMENFASSUNG" >> {{ output_file }}
+        echo "================================================================================" >> {{ output_file }}
+        echo "" >> {{ output_file }}
+        
+        # Zähle erreichbare Hosts
+        erreichbar_alt=$(grep -c "Status: ERREICHBAR (alte IP)" {{ output_file }} || echo 0)
+        erreichbar_neu=$(grep -c "Status: ERREICHBAR (neue IP)" {{ output_file }} || echo 0)
+        nicht_erreichbar=$(grep -c "Status: NICHT ERREICHBAR" {{ output_file }} || echo 0)
+        
+        echo "Erreichbar (alte IP): $erreichbar_alt" >> {{ output_file }}
+        echo "Erreichbar (neue IP): $erreichbar_neu" >> {{ output_file }}
+        echo "Nicht erreichbar: $nicht_erreichbar" >> {{ output_file }}
+        echo "" >> {{ output_file }}
+        
+        # Liste nicht erreichbare Hosts
+        if [ $nicht_erreichbar -gt 0 ]; then
+          echo "Nicht erreichbare Hosts:" >> {{ output_file }}
+          grep -B 2 "Status: NICHT ERREICHBAR" {{ output_file }} | grep "=== HOST:" | sed 's/=== HOST: /  - /' | sed 's/ ===//' >> {{ output_file }}
+          echo "" >> {{ output_file }}
+        fi
+        
+        echo "================================================================================" >> {{ output_file }}
+        echo "Report gespeichert: {{ output_file }}" >> {{ output_file }}
+        echo "================================================================================" >> {{ output_file }}
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+    
+    - name: Zeige Report-Pfad
+      debug:
+        msg:
+          - "=== NETZWERK-STATUS REPORT ERSTELLT ==="
+          - "Datei: {{ output_file }}"
+          - ""
+          - "Zum Anzeigen:"
+          - "  cat {{ output_file }}"
+          - ""
+          - "Oder mit Pager:"
+          - "  less {{ output_file }}"
+
+# Made with Bob
