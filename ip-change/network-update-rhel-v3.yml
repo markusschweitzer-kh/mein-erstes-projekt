@@ -128,12 +128,13 @@
     
     - name: Suche ungenutztes Interface für 10.x falls nicht gefunden
       shell: |
-        for iface in $(ls /sys/class/net/ | grep -E '^(eth|ens|enp)'); do
+        for iface in $(ls /sys/class/net/ | grep -E '^(eth|ens|enp)' | sort); do
           if ! ip addr show $iface | grep -q 'inet '; then
             echo $iface
             exit 0
           fi
         done
+        echo ""
       register: unused_interface
       changed_when: false
       when: interface_10x is not defined
@@ -147,21 +148,22 @@
         - unused_interface.stdout is defined
         - unused_interface.stdout != ""
     
-    - name: Erstelle virtuelles Interface falls kein 10.x Interface vorhanden
-      set_fact:
-        interface_10x: "{{ interface_9x }}:0"
-        current_ip_10x: "nicht konfiguriert (virtuell)"
-      when:
-        - interface_10x is not defined
-        - interface_9x is defined
-    
-    - name: Log - Virtuelles Interface wird erstellt
+    - name: Log - Freies Interface gefunden
       lineinfile:
         path: "{{ log_file }}"
-        line: "[{{ ansible_date_time.time }}] HINWEIS: Erstelle virtuelles Interface {{ interface_10x }} für 10.x Netzwerk"
+        line: "[{{ ansible_date_time.time }}] HINWEIS: Freies Interface {{ interface_10x }} gefunden - wird für 10.x Netzwerk verwendet"
       when:
         - interface_10x is defined
-        - interface_10x is search(':')
+        - current_ip_10x == "nicht konfiguriert"
+    
+    - name: Fehler wenn kein Interface für 10.x verfügbar
+      fail:
+        msg: |
+          Kein Interface für 10.x IP verfügbar!
+          - Kein 10.x Interface gefunden
+          - Kein freies Interface verfügbar
+          Bitte füge eine zweite Netzwerkkarte hinzu oder verwende ein virtuelles Interface.
+      when: interface_10x is not defined
     
     - name: Fehler wenn 9.x Interface nicht gefunden
       fail:
