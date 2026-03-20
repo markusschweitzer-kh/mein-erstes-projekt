@@ -77,42 +77,58 @@
               if ping -c 1 -W 2 "$ip" >/dev/null 2>&1; then
                 echo "Status: ERREICHBAR (alte IP)" >> {{ output_file }}
                 
-                # Sammle Daten via SSH
-                if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" "hostname" >/dev/null 2>&1; then
+                # Sammle Daten via SSH (probiere ansible, dann root)
+                SSH_USER=""
+                if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes ansible@"$ip" "hostname" >/dev/null 2>&1; then
+                  SSH_USER="ansible"
+                elif ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes root@"$ip" "hostname" >/dev/null 2>&1; then
+                  SSH_USER="root"
+                fi
+                
+                if [ -n "$SSH_USER" ]; then
+                  echo "SSH User: $SSH_USER" >> {{ output_file }}
                   echo "" >> {{ output_file }}
                   echo "--- Hostname ---" >> {{ output_file }}
-                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" "hostname -f" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
+                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "$SSH_USER@$ip" "hostname -f" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
                   
                   echo "" >> {{ output_file }}
                   echo "--- IP-Adressen ---" >> {{ output_file }}
-                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" "ip -o addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print \$2, \$4}'" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
+                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "$SSH_USER@$ip" "ip -o addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print \$2, \$4}'" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
                   
                   echo "" >> {{ output_file }}
                   echo "--- Default Gateway ---" >> {{ output_file }}
-                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" "ip route show default" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
+                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "$SSH_USER@$ip" "ip route show default" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
                 else
-                  echo "SSH: NICHT ERREICHBAR" >> {{ output_file }}
+                  echo "SSH: NICHT ERREICHBAR (kein Key für ansible oder root)" >> {{ output_file }}
                 fi
               
               # Teste neue IP falls alte nicht erreichbar
               elif ping -c 1 -W 2 "$ip_neu" >/dev/null 2>&1; then
                 echo "Status: ERREICHBAR (neue IP)" >> {{ output_file }}
                 
-                # Sammle Daten via SSH
-                if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip_neu" "hostname" >/dev/null 2>&1; then
+                # Sammle Daten via SSH (probiere ansible, dann root)
+                SSH_USER=""
+                if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes ansible@"$ip_neu" "hostname" >/dev/null 2>&1; then
+                  SSH_USER="ansible"
+                elif ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes root@"$ip_neu" "hostname" >/dev/null 2>&1; then
+                  SSH_USER="root"
+                fi
+                
+                if [ -n "$SSH_USER" ]; then
+                  echo "SSH User: $SSH_USER" >> {{ output_file }}
                   echo "" >> {{ output_file }}
                   echo "--- Hostname ---" >> {{ output_file }}
-                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip_neu" "hostname -f" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
+                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "$SSH_USER@$ip_neu" "hostname -f" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
                   
                   echo "" >> {{ output_file }}
                   echo "--- IP-Adressen ---" >> {{ output_file }}
-                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip_neu" "ip -o addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print \$2, \$4}'" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
+                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "$SSH_USER@$ip_neu" "ip -o addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print \$2, \$4}'" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
                   
                   echo "" >> {{ output_file }}
                   echo "--- Default Gateway ---" >> {{ output_file }}
-                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip_neu" "ip route show default" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
+                  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "$SSH_USER@$ip_neu" "ip route show default" >> {{ output_file }} 2>&1 || echo "Fehler beim Abrufen" >> {{ output_file }}
                 else
-                  echo "SSH: NICHT ERREICHBAR" >> {{ output_file }}
+                  echo "SSH: NICHT ERREICHBAR (kein Key für ansible oder root)" >> {{ output_file }}
                 fi
               
               else

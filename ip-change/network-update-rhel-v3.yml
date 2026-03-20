@@ -147,6 +147,22 @@
         - unused_interface.stdout is defined
         - unused_interface.stdout != ""
     
+    - name: Erstelle virtuelles Interface falls kein 10.x Interface vorhanden
+      set_fact:
+        interface_10x: "{{ interface_9x }}:0"
+        current_ip_10x: "nicht konfiguriert (virtuell)"
+      when:
+        - interface_10x is not defined
+        - interface_9x is defined
+    
+    - name: Log - Virtuelles Interface wird erstellt
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] HINWEIS: Erstelle virtuelles Interface {{ interface_10x }} für 10.x Netzwerk"
+      when:
+        - interface_10x is defined
+        - interface_10x is search(':')
+    
     - name: Fehler wenn 9.x Interface nicht gefunden
       fail:
         msg: "Konnte kein Interface mit 9.x IP identifizieren!"
