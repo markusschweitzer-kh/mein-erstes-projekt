@@ -1,0 +1,415 @@
+---
+#==============================================================================
+# DNS-Konfiguration Update Playbook
+#==============================================================================
+# Beschreibung: Ändert DNS-Server von 8.8.8.8 auf 9.0.0.1 und 9.0.0.2
+# Autor: Ansible Automation
+# Datum: 2026-03-23
+# 
+# Wichtig: Server sind nur noch unter neuen IPs erreichbar!
+#==============================================================================
+
+- name: DNS-Konfiguration aktualisieren
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    dns_servers:
+      - "9.0.0.1"
+      - "9.0.0.2"
+    old_dns: "8.8.8.8"
+    log_dir: "/var/log/ansible-dns-update"
+    backup_dir: "/root/dns-backup-{{ ansible_date_time.epoch }}"
+    
+  tasks:
+    #==========================================================================
+    # INITIALISIERUNG
+    #==========================================================================
+    
+    - name: Erstelle Log-Verzeichnis
+      file:
+        path: "{{ log_dir }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Setze Log-Datei
+      set_fact:
+        log_file: "{{ log_dir }}/dns-update-{{ ansible_date_time.iso8601_basic_short }}.log"
+    
+    - name: Starte DNS-Update-Log
+      copy:
+        content: |
+          ================================================================================
+          DNS-Konfiguration Update Log
+          ================================================================================
+          Start: {{ ansible_date_time.iso8601 }}
+          Host: {{ ansible_hostname }}
+          IP: {{ ansible_default_ipv4.address }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          ================================================================================
+          Alte DNS: {{ old_dns }}
+          Neue DNS: {{ dns_servers | join(', ') }}
+          ================================================================================
+          
+        dest: "{{ log_file }}"
+        mode: '0644'
+    
+    #==========================================================================
+    # BACKUP
+    #==========================================================================
+    
+    - name: Erstelle Backup-Verzeichnis
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0700'
+    
+    - name: Backup - DNS-Konfiguration
+      shell: |
+        # Backup verschiedener DNS-Konfigurationsdateien
+        cp -a /etc/resolv.conf {{ backup_dir }}/resolv.conf.backup 2>/dev/null || true
+        cp -a /etc/sysconfig/network-scripts/ifcfg-* {{ backup_dir }}/ 2>/dev/null || true
+        cp -a /etc/netplan/*.yaml {{ backup_dir }}/ 2>/dev/null || true
+        cp -a /etc/sysconfig/network/ifcfg-* {{ backup_dir }}/ 2>/dev/null || true
+        nmcli connection show > {{ backup_dir }}/nmcli-before.txt 2>/dev/null || true
+        cat /etc/resolv.conf > {{ backup_dir }}/resolv.conf.txt
+      changed_when: false
+    
+    - name: Log - Backup erstellt
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] Backup: {{ backup_dir }}"
+    
+    #==========================================================================
+    # AKTUELLE DNS-KONFIGURATION PRÜFEN
+    #==========================================================================
+    
+    - name: Prüfe aktuelle DNS-Server
+      shell: |
+        cat /etc/resolv.conf | grep -E '^nameserver' | awk '{print $2}'
+      register: current_dns
+      changed_when: false
+    
+    - name: Log - Aktuelle DNS-Server
+      lineinfile:
+        path: "{{ log_file }}"
+        line: |
+          [{{ ansible_date_time.time }}] Aktuelle DNS-Server:
+          {{ current_dns.stdout }}
+    
+    #==========================================================================
+    # DNS-UPDATE FÜR RHEL/ORACLE LINUX (NetworkManager)
+    #==========================================================================
+    
+    - name: Erkenne RHEL/Oracle Linux System
+      set_fact:
+        is_rhel: "{{ ansible_distribution in ['RedHat', 'OracleLinux', 'CentOS', 'Rocky', 'AlmaLinux'] }}"
+    
+    - name: RHEL - Sammle alle aktiven Connections
+      shell: |
+        nmcli -t -f NAME connection show --active | head -10
+      register: active_connections
+      changed_when: false
+      when: is_rhel
+    
+    - name: RHEL - Update DNS für jede aktive Connection
+      shell: |
+        nmcli connection modify "{{ item }}" ipv4.dns "{{ dns_servers | join(' ') }}"
+        nmcli connection modify "{{ item }}" ipv4.ignore-auto-dns yes
+      loop: "{{ active_connections.stdout_lines }}"
+      when:
+        - is_rhel
+        - active_connections.stdout_lines is defined
+        - item != ""
+      register: nm_dns_update
+    
+    - name: RHEL - Reload NetworkManager Connections
+      command: nmcli connection reload
+      when: is_rhel
+      changed_when: true
+    
+    - name: RHEL - Restart aktive Connections
+      shell: |
+        for conn in {{ active_connections.stdout_lines | join(' ') }}; do
+          nmcli connection down "$conn" 2>/dev/null || true
+          sleep 1
+          nmcli connection up "$conn" 2>/dev/null || true
+        done
+      when:
+        - is_rhel
+        - active_connections.stdout_lines is defined
+      async: 60
+      poll: 0
+    
+    - name: Log - RHEL DNS Update
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] RHEL: DNS für {{ active_connections.stdout_lines | length }} Connections aktualisiert"
+      when: is_rhel
+    
+    #==========================================================================
+    # DNS-UPDATE FÜR SLES (wicked)
+    #==========================================================================
+    
+    - name: Erkenne SLES System
+      set_fact:
+        is_sles: "{{ ansible_distribution == 'SLES' or ansible_distribution == 'openSUSE' }}"
+    
+    - name: SLES - Finde alle ifcfg-Dateien
+      find:
+        paths: /etc/sysconfig/network
+        patterns: 'ifcfg-*'
+        excludes: 'ifcfg-lo'
+      register: sles_ifcfg_files
+      when: is_sles
+    
+    - name: SLES - Update DNS in ifcfg-Dateien
+      lineinfile:
+        path: "{{ item.path }}"
+        regexp: '^NETCONFIG_DNS_STATIC_SERVERS='
+        line: 'NETCONFIG_DNS_STATIC_SERVERS="{{ dns_servers | join(" ") }}"'
+        backup: yes
+      loop: "{{ sles_ifcfg_files.files }}"
+      when:
+        - is_sles
+        - sles_ifcfg_files.files is defined
+    
+    - name: SLES - Update /etc/sysconfig/network/config
+      lineinfile:
+        path: /etc/sysconfig/network/config
+        regexp: '^NETCONFIG_DNS_STATIC_SERVERS='
+        line: 'NETCONFIG_DNS_STATIC_SERVERS="{{ dns_servers | join(" ") }}"'
+        backup: yes
+      when: is_sles
+    
+    - name: SLES - Netconfig update
+      command: netconfig update -f
+      when: is_sles
+      changed_when: true
+    
+    - name: SLES - Restart wicked
+      systemd:
+        name: wicked
+        state: restarted
+      when: is_sles
+    
+    - name: Log - SLES DNS Update
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] SLES: DNS aktualisiert und wicked neu gestartet"
+      when: is_sles
+    
+    #==========================================================================
+    # DNS-UPDATE FÜR UBUNTU (netplan)
+    #==========================================================================
+    
+    - name: Erkenne Ubuntu System
+      set_fact:
+        is_ubuntu: "{{ ansible_distribution == 'Ubuntu' }}"
+    
+    - name: Ubuntu - Finde netplan-Konfiguration
+      find:
+        paths: /etc/netplan
+        patterns: '*.yaml'
+      register: netplan_files
+      when: is_ubuntu
+    
+    - name: Ubuntu - Backup netplan-Dateien
+      copy:
+        src: "{{ item.path }}"
+        dest: "{{ item.path }}.backup-{{ ansible_date_time.epoch }}"
+        remote_src: yes
+      loop: "{{ netplan_files.files }}"
+      when:
+        - is_ubuntu
+        - netplan_files.files is defined
+    
+    - name: Ubuntu - Update DNS in netplan (mit Python)
+      shell: |
+        python3 << 'EOF'
+        import yaml
+        import sys
+        
+        file_path = "{{ item.path }}"
+        dns_servers = {{ dns_servers | to_json }}
+        
+        try:
+            with open(file_path, 'r') as f:
+                config = yaml.safe_load(f)
+            
+            if config and 'network' in config:
+                for iface_type in ['ethernets', 'bonds', 'bridges']:
+                    if iface_type in config['network']:
+                        for iface in config['network'][iface_type].values():
+                            if 'nameservers' not in iface:
+                                iface['nameservers'] = {}
+                            iface['nameservers']['addresses'] = dns_servers
+            
+            with open(file_path, 'w') as f:
+                yaml.dump(config, f, default_flow_style=False)
+            
+            print("DNS updated successfully")
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        EOF
+      loop: "{{ netplan_files.files }}"
+      when:
+        - is_ubuntu
+        - netplan_files.files is defined
+      register: netplan_update
+    
+    - name: Ubuntu - Apply netplan
+      command: netplan apply
+      when: is_ubuntu
+      changed_when: true
+    
+    - name: Log - Ubuntu DNS Update
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] Ubuntu: DNS in netplan aktualisiert"
+      when: is_ubuntu
+    
+    #==========================================================================
+    # RESOLV.CONF DIREKT AKTUALISIEREN (Fallback)
+    #==========================================================================
+    
+    - name: Erstelle neue resolv.conf
+      copy:
+        content: |
+          # Generated by Ansible DNS Update
+          # {{ ansible_date_time.iso8601 }}
+          {% for dns in dns_servers %}
+          nameserver {{ dns }}
+          {% endfor %}
+          
+          options timeout:2 attempts:3
+        dest: /etc/resolv.conf
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+    
+    - name: Schütze resolv.conf vor Überschreiben (optional)
+      file:
+        path: /etc/resolv.conf
+        attributes: +i
+      failed_when: false
+    
+    - name: Log - resolv.conf aktualisiert
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] /etc/resolv.conf direkt aktualisiert"
+    
+    #==========================================================================
+    # VALIDIERUNG
+    #==========================================================================
+    
+    - name: Warte auf DNS-Propagierung
+      pause:
+        seconds: 5
+    
+    - name: Prüfe neue DNS-Server
+      shell: |
+        cat /etc/resolv.conf | grep -E '^nameserver' | awk '{print $2}'
+      register: new_dns
+      changed_when: false
+    
+    - name: Teste DNS-Auflösung
+      shell: |
+        nslookup google.com {{ dns_servers[0] }} 2>&1 | grep -q "Address:"
+      register: dns_test
+      failed_when: false
+      changed_when: false
+    
+    - name: Log - Validierung
+      lineinfile:
+        path: "{{ log_file }}"
+        line: |
+          [{{ ansible_date_time.time }}] ================================================================================
+          [{{ ansible_date_time.time }}] Validierung:
+          [{{ ansible_date_time.time }}] Neue DNS-Server:
+          {{ new_dns.stdout }}
+          [{{ ansible_date_time.time }}] DNS-Test: {{ 'OK' if dns_test.rc == 0 else 'FEHLER' }}
+          [{{ ansible_date_time.time }}] ================================================================================
+    
+    #==========================================================================
+    # ROLLBACK-SCRIPT
+    #==========================================================================
+    
+    - name: Erstelle Rollback-Script
+      copy:
+        content: |
+          #!/bin/bash
+          # DNS Rollback-Script
+          # Erstellt: {{ ansible_date_time.iso8601 }}
+          
+          echo "Starte DNS-Rollback..."
+          
+          # Resolv.conf zurücksetzen
+          if [ -f {{ backup_dir }}/resolv.conf.backup ]; then
+              cp {{ backup_dir }}/resolv.conf.backup /etc/resolv.conf
+              echo "resolv.conf wiederhergestellt"
+          fi
+          
+          {% if is_rhel %}
+          # RHEL: NetworkManager Connections zurücksetzen
+          {% for conn in active_connections.stdout_lines %}
+          nmcli connection modify "{{ conn }}" ipv4.dns "{{ old_dns }}"
+          {% endfor %}
+          nmcli connection reload
+          {% endif %}
+          
+          {% if is_sles %}
+          # SLES: ifcfg-Dateien zurücksetzen
+          cp {{ backup_dir }}/ifcfg-* /etc/sysconfig/network/ 2>/dev/null || true
+          netconfig update -f
+          systemctl restart wicked
+          {% endif %}
+          
+          {% if is_ubuntu %}
+          # Ubuntu: netplan zurücksetzen
+          cp {{ backup_dir }}/*.yaml /etc/netplan/ 2>/dev/null || true
+          netplan apply
+          {% endif %}
+          
+          echo "Rollback abgeschlossen!"
+          echo "Neue DNS-Server:"
+          cat /etc/resolv.conf | grep nameserver
+        dest: "{{ backup_dir }}/rollback-dns.sh"
+        mode: '0755'
+    
+    #==========================================================================
+    # ABSCHLUSS
+    #==========================================================================
+    
+    - name: Abschluss-Log
+      lineinfile:
+        path: "{{ log_file }}"
+        line: |
+          [{{ ansible_date_time.time }}] ================================================================================
+          [{{ ansible_date_time.time }}] DNS-Update abgeschlossen
+          [{{ ansible_date_time.time }}] ================================================================================
+          [{{ ansible_date_time.time }}] Backup: {{ backup_dir }}
+          [{{ ansible_date_time.time }}] Rollback: {{ backup_dir }}/rollback-dns.sh
+          [{{ ansible_date_time.time }}] Log: {{ log_file }}
+          [{{ ansible_date_time.time }}] ================================================================================
+    
+    - name: Zeige Zusammenfassung
+      debug:
+        msg:
+          - "=== DNS-UPDATE ABGESCHLOSSEN ==="
+          - "Alte DNS: {{ old_dns }}"
+          - "Neue DNS: {{ dns_servers | join(', ') }}"
+          - ""
+          - "Aktuelle DNS-Server:"
+          - "{{ new_dns.stdout }}"
+          - ""
+          - "DNS-Test: {{ 'OK' if dns_test.rc == 0 else 'FEHLER - Bitte manuell prüfen' }}"
+          - ""
+          - "Backup: {{ backup_dir }}"
+          - "Rollback: {{ backup_dir }}/rollback-dns.sh"
+          - "Log: {{ log_file }}"
+
+# Made with Bob
