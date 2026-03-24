@@ -42,11 +42,15 @@
     - name: Disk Details (lsblk)
       command: lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE,UUID
       register: lsblk_info
+      async: 30
+      poll: 5
 
     - name: Partition Informationen
       command: fdisk -l
       register: fdisk_info
       ignore_errors: yes
+      async: 30
+      poll: 5
 
     - name: Filesystem Informationen
       command: cat /etc/fstab
@@ -70,6 +74,8 @@
       command: dmidecode
       register: dmidecode_info
       ignore_errors: yes
+      async: 30
+      poll: 5
 
     # Betriebssystem-Informationen
     - name: OS Release Informationen
