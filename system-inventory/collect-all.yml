@@ -12,6 +12,7 @@
     - name: Erstelle Haupt-Output-Verzeichnis
       delegate_to: localhost
       run_once: true
+      become: no
       file:
         path: "{{ output_dir }}"
         state: directory
@@ -20,6 +21,7 @@
     - name: Erstelle Zeitstempel-Datei
       delegate_to: localhost
       run_once: true
+      become: no
       copy:
         content: |
           ================================================================================
@@ -81,6 +83,7 @@
       ignore_errors: yes
 
     - name: Erstelle Zusammenfassungs-Report
+      become: no
       copy:
         content: |
           ================================================================================

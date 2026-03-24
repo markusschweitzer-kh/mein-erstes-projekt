@@ -12,6 +12,7 @@
     - name: Erstelle Output-Verzeichnis
       delegate_to: localhost
       run_once: true
+      become: no
       file:
         path: "{{ output_dir }}/system"
         state: directory
@@ -262,6 +263,7 @@
     # Speichere alle Informationen in einer Datei pro Host
     - name: Erstelle System-Report für Host
       delegate_to: localhost
+      become: no
       copy:
         content: |
           ================================================================================
@@ -465,6 +467,7 @@
     # Erstelle separate Paketliste (kann sehr groß sein)
     - name: Erstelle Paketliste für Host
       delegate_to: localhost
+      become: no
       copy:
         content: |
           ================================================================================
@@ -486,6 +489,7 @@
     - name: Zusammenfassung
       delegate_to: localhost
       run_once: true
+      become: no
       debug:
         msg: "System-Informationen wurden gesammelt in: {{ output_dir }}/system/"
 

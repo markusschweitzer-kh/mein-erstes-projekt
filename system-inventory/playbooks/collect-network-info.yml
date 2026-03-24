@@ -12,6 +12,7 @@
     - name: Erstelle Output-Verzeichnis
       delegate_to: localhost
       run_once: true
+      become: no
       file:
         path: "{{ output_dir }}/network"
         state: directory
@@ -140,6 +141,7 @@
     # Speichere alle Informationen in einer Datei pro Host
     - name: Erstelle Netzwerk-Report für Host
       delegate_to: localhost
+      become: no
       copy:
         content: |
           ================================================================================
@@ -239,6 +241,7 @@
     - name: Zusammenfassung
       delegate_to: localhost
       run_once: true
+      become: no
       debug:
         msg: "Netzwerk-Informationen wurden gesammelt in: {{ output_dir }}/network/"
 
