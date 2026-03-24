@@ -17,6 +17,8 @@
         path: "{{ output_dir }}/system"
         state: directory
         mode: '0755'
+        owner: "{{ lookup('env', 'USER') }}"
+        group: "{{ lookup('env', 'USER') }}"
 
     # Hardware-Informationen
     - name: CPU Informationen
