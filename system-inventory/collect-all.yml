@@ -1,8 +1,9 @@
 ---
-- name: Master Playbook - Sammle alle System-Informationen
-  hosts: all
+- name: Vorbereitung - Erstelle Output-Verzeichnisse
+  hosts: localhost
   gather_facts: yes
-  become: yes
+  become: no
+  connection: local
   
   vars:
     output_dir: "{{ playbook_dir }}/output"
@@ -10,18 +11,12 @@
     
   tasks:
     - name: Erstelle Haupt-Output-Verzeichnis
-      delegate_to: localhost
-      run_once: true
-      become: no
       file:
         path: "{{ output_dir }}"
         state: directory
         mode: '0755'
 
     - name: Erstelle Zeitstempel-Datei
-      delegate_to: localhost
-      run_once: true
-      become: no
       copy:
         content: |
           ================================================================================
@@ -43,6 +38,16 @@
         dest: "{{ output_dir }}/inventory_run_{{ timestamp }}.txt"
         mode: '0644'
 
+- name: Master Playbook - Sammle alle System-Informationen
+  hosts: all
+  gather_facts: yes
+  become: yes
+  
+  vars:
+    output_dir: "{{ playbook_dir }}/output"
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+    
+  tasks:
     - name: Info-Nachricht
       debug:
         msg: "Starte Datensammlung für {{ inventory_hostname }}..."
@@ -63,9 +68,11 @@
 - name: Erstelle Zusammenfassung
   hosts: localhost
   gather_facts: yes
+  become: no
+  connection: local
   
   vars:
-    output_dir: "./output"
+    output_dir: "{{ playbook_dir }}/output"
     timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
     
   tasks:
@@ -83,7 +90,6 @@
       ignore_errors: yes
 
     - name: Erstelle Zusammenfassungs-Report
-      become: no
       copy:
         content: |
           ================================================================================
