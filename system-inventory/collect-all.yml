@@ -10,6 +10,18 @@
     timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
     
   tasks:
+    - name: Prüfe ob Output-Verzeichnis als root existiert
+      stat:
+        path: "{{ output_dir }}"
+      register: output_dir_stat
+
+    - name: Entferne altes Output-Verzeichnis falls es root gehört
+      become: yes
+      file:
+        path: "{{ output_dir }}"
+        state: absent
+      when: output_dir_stat.stat.exists and output_dir_stat.stat.pw_name == 'root'
+
     - name: Erstelle Haupt-Output-Verzeichnis
       file:
         path: "{{ output_dir }}"
