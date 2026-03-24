@@ -1,432 +1,246 @@
-# Red Hat Linux Netzwerkkonfiguration Update mit Ansible
+# IP-Migration Projekt
 
-Dieses Ansible Playbook automatisiert die Änderung von Hostname und Netzwerkkonfiguration auf Red Hat Linux VMs basierend auf einer CSV-Datei.
+Automatisierte IP-Migration für RHEL/Oracle Linux, SLES und Ubuntu Server mit Ansible.
 
-## 📋 Inhaltsverzeichnis
+## 📋 Übersicht
 
-- [Features](#features)
-- [Voraussetzungen](#voraussetzungen)
-- [Installation](#installation)
-- [Verwendung](#verwendung)
-- [CSV-Format](#csv-format)
-- [Sicherheit](#sicherheit)
-- [Troubleshooting](#troubleshooting)
+Dieses Projekt automatisiert die Migration von Server-IPs und Hostnamen:
+- **9.x Netzwerk** (alte → neue IP)
+- **10.x Netzwerk** (alte → neue IP)
+- **Hostname** (alt → neu)
+- **DNS-Server** (8.8.8.8 → 9.0.0.1, 9.0.0.2)
 
-## ✨ Features
+## 🚀 Schnellstart
 
-- ✅ **Automatische Host-Identifikation** - Findet den Host automatisch in der CSV-Datei
-- ✅ **Validierung vor Änderungen** - Prüft Hostname und IPs gegen CSV-Daten
-- ✅ **Dual-Interface Support** - Unterstützt zwei Netzwerkschnittstellen (9.x und 10.x)
-- ✅ **Automatisches Backup** - Erstellt Backups aller Konfigurationsdateien
-- ✅ **Detailliertes Logging** - Protokolliert alle Änderungen
-- ✅ **Dry-Run Modus** - Testet Änderungen ohne sie durchzuführen
-- ✅ **Remote & Lokal** - Kann remote oder lokal ausgeführt werden
-
-## 📦 Voraussetzungen
-
-### Auf dem Control Node (wo Ansible läuft):
-```bash
-# Ansible installieren
-sudo yum install ansible -y
-# oder
-sudo dnf install ansible -y
-# oder
-pip3 install ansible
-```
-
-### Auf den Ziel-VMs:
-- Red Hat Enterprise Linux 7/8/9 oder Oracle Linux 7/8/9
-- Python 3.x
-- Root-Zugriff oder sudo-Rechte
-- SSH-Zugriff (für Remote-Ausführung)
-
-**Hinweis:** Oracle Linux ist vollständig kompatibel! Siehe [`ORACLE_LINUX_KOMPATIBILITAET.md`](ORACLE_LINUX_KOMPATIBILITAET.md:1) für Details.
-
-## 🚀 Installation
-
-1. **Repository klonen oder Dateien kopieren:**
-```bash
-cd /path/to/ip-change
-```
-
-2. **Dateien prüfen:**
-```bash
-ls -la
-# Sollte enthalten:
-# - network-update.yml      (Hauptplaybook)
-# - ifcfg-template.j2       (Netzwerk-Template)
-# - ip-change.csv           (Ihre Daten)
-# - inventory.ini           (Inventory-Beispiel)
-# - README.md               (Diese Datei)
-```
-
-3. **CSV-Datei vorbereiten:**
-   - Stellen Sie sicher, dass [`ip-change.csv`](ip-change.csv:1) korrekt formatiert ist
-   - Siehe [CSV-Format](#csv-format) für Details
-
-## 📖 Verwendung
-
-### Lokal auf der VM ausführen
-
-Wenn Sie direkt auf der VM sind, die geändert werden soll:
+### 1. Vorbereitung
 
 ```bash
-# Dry-Run (zeigt nur was geändert würde)
-ansible-playbook -i localhost, -c local network-update.yml --check --diff
-
-# Tatsächliche Ausführung
-ansible-playbook -i localhost, -c local network-update.yml
+cd ip-change
+# CSV-Datei mit allen Hosts prüfen
+cat data/ip-change.csv
 ```
 
-### Remote auf einer VM ausführen
+### 2. IP-Migration durchführen
 
-1. **Inventory-Datei anpassen:**
+**RHEL/Oracle Linux:**
 ```bash
-nano inventory.ini
+ansible-playbook playbooks/network-update-rhel-v3.yml -i "9.125.190.50," -u admin --ask-pass --ask-become-pass
 ```
 
-Beispiel:
-```ini
-[redhat_vms]
-itcoavp147.itc.ibm.com ansible_host=9.155.64.147 ansible_user=root
-```
-
-2. **SSH-Zugriff testen:**
+**SLES:**
 ```bash
-ansible -i inventory.ini redhat_vms -m ping
+ansible-playbook playbooks/network-update-sles-v3.yml -i "9.125.190.50," -u admin --ask-pass --ask-become-pass
 ```
 
-3. **Playbook ausführen:**
+**Ubuntu:**
 ```bash
-# Dry-Run
-ansible-playbook -i inventory.ini network-update.yml --check --diff
-
-# Tatsächliche Ausführung
-ansible-playbook -i inventory.ini network-update.yml
-
-# Mit Passwort-Abfrage
-ansible-playbook -i inventory.ini network-update.yml --ask-pass --ask-become-pass
+ansible-playbook playbooks/network-update-ubuntu.yml -i "9.125.190.50," -u admin --ask-pass --ask-become-pass
 ```
 
-### Mehrere VMs gleichzeitig
+### 3. DNS-Server aktualisieren
 
 ```bash
-# Alle Hosts in der Gruppe
-ansible-playbook -i inventory.ini network-update.yml
-
-# Nur bestimmte Hosts
-ansible-playbook -i inventory.ini network-update.yml --limit "itcoavp147.itc.ibm.com"
-
-# Parallel ausführen (5 Hosts gleichzeitig)
-ansible-playbook -i inventory.ini network-update.yml --forks 5
+ansible-playbook playbooks/update-dns-config.yml -i "9.125.190.50," -u admin --ask-pass --ask-become-pass
 ```
 
-### Mit spezifischer CSV-Datei
+### 4. Status prüfen
 
 ```bash
-ansible-playbook network-update.yml -e "csv_file=/path/to/other-file.csv"
+ansible-playbook playbooks/check-migration-status.yml --ask-pass --ask-become-pass
 ```
 
-## 📊 CSV-Format
+## 📁 Projekt-Struktur
 
-Die CSV-Datei muss folgende Spalten enthalten (Semikolon-getrennt):
+```
+ip-change/
+├── playbooks/              # Ansible Playbooks
+│   ├── network-update-rhel-v3.yml    # RHEL/Oracle Linux
+│   ├── network-update-sles-v3.yml    # SLES
+│   ├── network-update-ubuntu.yml     # Ubuntu
+│   ├── update-dns-config.yml         # DNS-Update
+│   └── check-migration-status.yml    # Status-Check
+│
+├── templates/              # Jinja2 Templates
+│   ├── ifcfg-template.j2            # RHEL/Oracle
+│   ├── ifcfg-sles-template.j2       # SLES
+│   ├── routes-sles-template.j2      # SLES Routes
+│   └── netplan-template.j2          # Ubuntu
+│
+├── data/                   # Daten
+│   ├── ip-change.csv               # Host-Daten
+│   └── inventory.ini               # Ansible Inventory
+│
+├── docs/                   # Dokumentation
+│   ├── README.md                   # Diese Datei
+│   ├── SCHNELLSTART.md            # Quick-Start
+│   ├── README_DNS_UPDATE.md       # DNS-Anleitung
+│   └── README_CHECK_STATUS.md     # Status-Check Anleitung
+│
+└── archive/                # Archivierte Dateien
+    ├── old-versions/              # Alte Playbook-Versionen
+    ├── scripts/                   # Alte Bash-Scripts
+    └── old-docs/                  # Alte Dokumentation
+```
+
+## 🎯 Playbooks
+
+### IP-Migration
+
+| Playbook | Betriebssystem | Beschreibung |
+|----------|----------------|--------------|
+| `network-update-rhel-v3.yml` | RHEL/Oracle Linux | IP-Migration mit NetworkManager |
+| `network-update-sles-v3.yml` | SLES/openSUSE | IP-Migration mit wicked |
+| `network-update-ubuntu.yml` | Ubuntu | IP-Migration mit netplan |
+
+### DNS-Update
+
+| Playbook | Beschreibung |
+|----------|--------------|
+| `update-dns-config.yml` | Ändert DNS von 8.8.8.8 auf 9.0.0.1, 9.0.0.2 |
+
+### Status-Check
+
+| Playbook | Beschreibung |
+|----------|--------------|
+| `check-migration-status.yml` | Prüft Migrations-Status aller Hosts |
+
+## 📝 CSV-Format
+
+Die Datei `data/ip-change.csv` enthält alle Host-Informationen:
 
 ```csv
 Hostname-alt;Hostname-neu;Ip-alt;ip-neu;10-alt;10-neu
-itcoavp147.itc.ibm.com;itcopreq40.itc.ibm.com;9.155.64.147;9.125.190.40;10.10.64.147;10.10.64.40
+server01.old.com;server01.new.com;9.125.190.50;9.125.190.51;10.10.64.50;10.10.64.51
 ```
 
-### Spalten-Beschreibung:
+## 🔧 Typischer Workflow
 
-| Spalte | Beschreibung | Beispiel |
-|--------|--------------|----------|
-| `Hostname-alt` | Aktueller Hostname | itcoavp147.itc.ibm.com |
-| `Hostname-neu` | Neuer Hostname | itcopreq40.itc.ibm.com |
-| `Ip-alt` | Aktuelle 9.x IP | 9.155.64.147 |
-| `ip-neu` | Neue 9.x IP | 9.125.190.40 |
-| `10-alt` | Aktuelle 10.x IP | 10.10.64.147 |
-| `10-neu` | Neue 10.x IP | 10.10.64.40 |
+### Einzelner Host
 
-**Wichtig:**
-- Verwenden Sie Semikolon (`;`) als Trennzeichen
-- Erste Zeile ist die Header-Zeile
-- Keine Leerzeichen vor/nach den Werten (werden automatisch entfernt)
-
-## 🔧 Was wird geändert?
-
-Das Playbook führt folgende Änderungen durch:
-
-### 1. Hostname
-- ✏️ Ändert [`/etc/hostname`](file:///etc/hostname:1)
-- ✏️ Setzt Hostname mit `hostnamectl`
-- ✏️ Aktualisiert [`/etc/hosts`](file:///etc/hosts:1)
-
-### 2. Netzwerk-Interface 1 (9.x Netzwerk)
-- ✏️ IP-Adresse: Neue 9.x IP aus CSV
-- ✏️ Gateway: `9.125.190.1`
-- ✏️ Netzmaske: `255.255.255.128` (/25)
-- ✏️ Primäres Interface (DEFROUTE=yes)
-
-### 3. Netzwerk-Interface 2 (10.x Netzwerk)
-- ✏️ IP-Adresse: Neue 10.x IP aus CSV
-- ✏️ Netzmaske: `255.255.255.128` (/25)
-- ✏️ Kein Gateway (DEFROUTE=no)
-
-### 4. Netzwerk-Neustart
-- 🔄 Lädt Konfiguration neu
-- 🔄 Startet beide Interfaces neu
-- 🔄 Unterstützt NetworkManager und network service
-
-## 🔒 Sicherheit
-
-### Backups
-
-Vor jeder Änderung werden automatisch Backups erstellt:
-
-```
-backups/
-└── hostname_20260313_083000/
-    ├── hostname
-    ├── ifcfg-eth0
-    └── ifcfg-eth1
-```
-
-### Validierung
-
-Das Playbook validiert:
-1. ✅ CSV-Datei existiert
-2. ✅ Hostname wird in CSV gefunden
-3. ✅ Aktuelle IPs stimmen mit CSV überein
-4. ✅ Beide Netzwerkinterfaces existieren
-
-**Wenn eine Validierung fehlschlägt, wird das Playbook abgebrochen!**
-
-### Logs
-
-Alle Änderungen werden protokolliert:
-
-```
-logs/
-└── hostname_20260313_083000.log
-```
-
-## 🔍 Ablauf im Detail
-
-```
-1. CSV-Datei einlesen
-   ↓
-2. Aktuellen Hostname ermitteln
-   ↓
-3. Host in CSV suchen
-   ↓
-4. Netzwerkinterfaces identifizieren
-   ├─ Interface mit 9.x IP
-   └─ Interface mit 10.x IP
-   ↓
-5. Aktuelle Konfiguration validieren
-   ├─ Hostname-alt prüfen
-   ├─ Ip-alt prüfen
-   └─ 10-alt prüfen
-   ↓
-6. Backups erstellen
-   ↓
-7. Änderungen durchführen
-   ├─ Hostname ändern
-   ├─ 9.x Interface konfigurieren
-   └─ 10.x Interface konfigurieren
-   ↓
-8. Netzwerk neu starten
-   ↓
-9. Validierung der Änderungen
-   ↓
-10. Log erstellen
-```
-
-## 🐛 Troubleshooting
-
-### Problem: "Hostname nicht in CSV gefunden"
-
-**Lösung:**
 ```bash
-# Aktuellen Hostname prüfen
-hostname -s
+# 1. IP-Migration
+ansible-playbook playbooks/network-update-rhel-v3.yml \
+  -i "9.125.190.50," -u admin --ask-pass --ask-become-pass
 
-# CSV-Datei prüfen
-cat ip-change.csv | grep $(hostname -s)
+# 2. DNS-Update
+ansible-playbook playbooks/update-dns-config.yml \
+  -i "9.125.190.51," -u admin --ask-pass --ask-become-pass
 
-# Hostname in CSV korrigieren oder VM-Hostname anpassen
+# 3. Status prüfen
+ansible-playbook playbooks/check-migration-status.yml \
+  --ask-pass --ask-become-pass
 ```
 
-### Problem: "Konnte Netzwerkinterfaces nicht identifizieren"
+### Mehrere Hosts
 
-**Lösung:**
 ```bash
-# Alle Interfaces anzeigen
-ip addr show
+# 1. Inventory erstellen
+cat > hosts.ini << EOF
+[migration]
+9.125.190.50 ansible_user=admin
+9.125.190.52 ansible_user=admin
+9.125.190.54 ansible_user=admin
+EOF
 
-# Prüfen ob 9.x und 10.x IPs vorhanden sind
-ip addr show | grep "inet 9\."
-ip addr show | grep "inet 10\."
+# 2. IP-Migration
+ansible-playbook playbooks/network-update-rhel-v3.yml \
+  -i hosts.ini --ask-pass --ask-become-pass
+
+# 3. DNS-Update (mit neuen IPs!)
+cat > hosts-new.ini << EOF
+[migration]
+9.125.190.51 ansible_user=admin
+9.125.190.53 ansible_user=admin
+9.125.190.55 ansible_user=admin
+EOF
+
+ansible-playbook playbooks/update-dns-config.yml \
+  -i hosts-new.ini --ask-pass --ask-become-pass
+
+# 4. Status prüfen
+ansible-playbook playbooks/check-migration-status.yml \
+  --ask-pass --ask-become-pass
 ```
 
-### Problem: "IP-Validierung fehlgeschlagen"
+## ✅ Was wird geprüft?
 
-**Lösung:**
-```bash
-# Aktuelle IPs prüfen
-ip -o addr show | grep -E 'inet ' | awk '{print $2, $4}'
-
-# Mit CSV vergleichen
-cat ip-change.csv | grep $(hostname -s)
-
-# CSV korrigieren falls nötig
-```
-
-### Problem: "Netzwerk nach Änderung nicht erreichbar"
-
-**Lösung:**
-```bash
-# Auf der VM (lokaler Zugriff nötig):
-
-# Netzwerk-Status prüfen
-systemctl status NetworkManager
-systemctl status network
-
-# Interfaces manuell neu starten
-nmcli connection reload
-nmcli connection up eth0
-nmcli connection up eth1
-
-# Oder mit network service
-ifdown eth0 && ifup eth0
-ifdown eth1 && ifup eth1
-
-# Backup wiederherstellen falls nötig
-cp backups/hostname_TIMESTAMP/ifcfg-eth0 /etc/sysconfig/network-scripts/
-```
-
-### Problem: "Ansible kann sich nicht verbinden"
-
-**Lösung:**
-```bash
-# SSH-Verbindung testen
-ssh root@9.155.64.147
-
-# Ansible Ping testen
-ansible -i inventory.ini redhat_vms -m ping
-
-# Mit Passwort
-ansible -i inventory.ini redhat_vms -m ping --ask-pass
-
-# SSH-Key kopieren
-ssh-copy-id root@9.155.64.147
-```
-
-## 📝 Beispiel-Ausgabe
-
-```
-PLAY [Update Red Hat Linux Network Configuration] *****************************
-
-TASK [Erstelle Backup- und Log-Verzeichnisse] *********************************
-ok: [itcoavp147.itc.ibm.com]
-
-TASK [Lese CSV-Datei ein] ******************************************************
-ok: [itcoavp147.itc.ibm.com]
-
-TASK [Suche passenden Eintrag in CSV] ******************************************
-ok: [itcoavp147.itc.ibm.com]
-
-TASK [Zeige gefundene Konfiguration] *******************************************
-ok: [itcoavp147.itc.ibm.com] => {
-    "msg": [
-        "Gefundene Konfiguration für Host: itcoavp147",
-        "Hostname alt: itcoavp147.itc.ibm.com",
-        "Hostname neu: itcopreq40.itc.ibm.com",
-        "IP alt (9.x): 9.155.64.147",
-        "IP neu (9.x): 9.125.190.40",
-        "IP alt (10.x): 10.10.64.147",
-        "IP neu (10.x): 10.10.64.40"
-    ]
-}
-
-TASK [Validierung erfolgreich] *************************************************
-ok: [itcoavp147.itc.ibm.com] => {
-    "msg": "✓ System erfolgreich identifiziert. Änderungen können durchgeführt werden."
-}
-
-TASK [Setze neuen Hostname in /etc/hostname] ***********************************
-changed: [itcoavp147.itc.ibm.com]
-
-TASK [Konfiguriere 9.x Interface (eth0)] ***************************************
-changed: [itcoavp147.itc.ibm.com]
-
-TASK [Konfiguriere 10.x Interface (eth1)] **************************************
-changed: [itcoavp147.itc.ibm.com]
-
-TASK [Zeige Ergebnis] **********************************************************
-ok: [itcoavp147.itc.ibm.com] => {
-    "msg": [
-        "=== Änderungen erfolgreich durchgeführt ===",
-        "Neuer Hostname: itcopreq40.itc.ibm.com",
-        "Neue Netzwerkkonfiguration:",
-        "...",
-        "Alte Konfiguration:",
-        "  Hostname: itcoavp147.itc.ibm.com",
-        "  9.x IP: 9.155.64.147",
-        "  10.x IP: 10.10.64.147",
-        "",
-        "Neue Konfiguration:",
-        "  Hostname: itcopreq40.itc.ibm.com",
-        "  9.x IP: 9.125.190.40",
-        "  10.x IP: 10.10.64.40",
-        "  Gateway: 9.125.190.1",
-        "  Netmask: 255.255.255.128"
-    ]
-}
-
-PLAY RECAP *********************************************************************
-itcoavp147.itc.ibm.com     : ok=25   changed=5    unreachable=0    failed=0
-```
+Der Status-Check validiert:
+- ✅ 9.x IP korrekt migriert
+- ✅ 10.x IP korrekt migriert
+- ✅ Hostname geändert
+- ✅ DNS-Server aktualisiert (9.0.0.1, 9.0.0.2)
 
 ## 🔄 Rollback
 
-Falls etwas schief geht, können Sie die Backups wiederherstellen:
+Jedes Playbook erstellt automatisch:
+- Backup in `/root/network-backup-<timestamp>/`
+- Rollback-Script: `/root/network-backup-<timestamp>/rollback.sh`
 
 ```bash
-# Backup-Verzeichnis finden
-ls -lt backups/
-
-# Dateien wiederherstellen
-BACKUP_DIR="backups/hostname_20260313_083000"
-
-# Hostname
-sudo cp $BACKUP_DIR/hostname /etc/hostname
-sudo hostnamectl set-hostname $(cat $BACKUP_DIR/hostname)
-
-# Netzwerk-Interfaces
-sudo cp $BACKUP_DIR/ifcfg-eth0 /etc/sysconfig/network-scripts/
-sudo cp $BACKUP_DIR/ifcfg-eth1 /etc/sysconfig/network-scripts/
-
-# Netzwerk neu starten
-sudo systemctl restart NetworkManager
-# oder
-sudo systemctl restart network
+# Rollback durchführen
+sudo /root/network-backup-<timestamp>/rollback.sh
+sudo reboot
 ```
 
-## 📚 Weitere Ressourcen
+## 📊 Logs
 
-- [Ansible Dokumentation](https://docs.ansible.com/)
-- [Red Hat Netzwerk-Konfiguration](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/8/html/configuring_and_managing_networking/)
-- [NetworkManager CLI](https://networkmanager.dev/docs/api/latest/nmcli.html)
+Alle Aktionen werden protokolliert:
+- IP-Migration: `/var/log/ansible-ip-migration/`
+- DNS-Update: `/var/log/ansible-dns-update/`
 
-## 📄 Lizenz
+## 🛠️ Troubleshooting
 
-Dieses Projekt ist für den internen Gebrauch bestimmt.
+### Problem: Passwort-Abfragen
 
-## 👤 Autor
+**Lösung:** SSH-Keys verwenden
+```bash
+ssh-copy-id admin@9.125.190.50
+```
 
-Erstellt für die IP-Migration von IBM ITC Servern.
+### Problem: Host nicht erreichbar
+
+```bash
+# Prüfe Erreichbarkeit
+ping 9.125.190.50
+ssh admin@9.125.190.50
+
+# Prüfe mit Ansible
+ansible all -i "9.125.190.50," -u admin --ask-pass -m ping
+```
+
+### Problem: DNS funktioniert nicht
+
+```bash
+# Prüfe DNS-Server
+cat /etc/resolv.conf
+
+# Teste DNS-Auflösung
+nslookup google.com 9.0.0.1
+```
+
+## 📚 Weitere Dokumentation
+
+- [SCHNELLSTART.md](docs/SCHNELLSTART.md) - Quick-Start Guide
+- [README_DNS_UPDATE.md](docs/README_DNS_UPDATE.md) - DNS-Update Details
+- [README_CHECK_STATUS.md](docs/README_CHECK_STATUS.md) - Status-Check Details
+
+## 🔐 Sicherheit
+
+- Alle Playbooks verwenden `become: yes` für sudo
+- Backups werden automatisch erstellt
+- Rollback-Scripts für Notfälle
+- Logs für Audit-Trail
+
+## 📞 Support
+
+Bei Problemen:
+1. Prüfe Logs in `/var/log/ansible-*/`
+2. Prüfe Backup in `/root/network-backup-*/`
+3. Verwende Rollback-Script falls nötig
+4. Kontaktiere System-Administrator
 
 ---
 
-**⚠️ WICHTIG:** Testen Sie das Playbook immer zuerst mit `--check --diff` bevor Sie es produktiv einsetzen!
+**Version:** 3.0  
+**Letzte Aktualisierung:** 2026-03-23  
+**Autor:** Ansible Automation Team

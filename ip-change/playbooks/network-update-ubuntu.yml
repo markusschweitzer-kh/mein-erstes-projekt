@@ -1,0 +1,500 @@
+---
+#==============================================================================
+# Ansible Playbook: Ubuntu Linux Netzwerkkonfiguration Update
+#==============================================================================
+# Dieses Playbook aktualisiert Hostname und Netzwerkkonfiguration basierend
+# auf der ip-change.csv Datei.
+#
+# Kompatibel mit:
+#   - Ubuntu 24.04 LTS (Noble Numbat)
+#   - Ubuntu 22.04 LTS (Jammy Jellyfish)
+#   - Ubuntu 20.04 LTS (Focal Fossa)
+#   - Ubuntu 18.04 LTS (Bionic Beaver)
+#
+# Verwendet Netplan für Netzwerkkonfiguration
+#
+# Verwendung:
+#   # Lokal ausführen:
+#   ansible-playbook -i localhost, -c local network-update-ubuntu.yml
+#
+#   # Remote ausführen:
+#   ansible-playbook -i inventory.ini network-update-ubuntu.yml
+#
+#   # Mit spezifischer CSV-Datei:
+#   ansible-playbook network-update-ubuntu.yml -e "csv_file=/path/to/ip-change.csv"
+#
+#   # Dry-Run (Check Mode):
+#   ansible-playbook network-update-ubuntu.yml --check --diff
+#==============================================================================
+
+- name: Update Ubuntu Linux Network Configuration
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    csv_file: "../data/ip-change.csv"
+    backup_dir: "{{ playbook_dir }}/backups"
+    log_dir: "{{ playbook_dir }}/logs"
+    new_gateway: "9.125.190.1"
+    new_netmask: "255.255.255.128"
+    new_prefix: "25"  # /25 = 255.255.255.128
+    netplan_config_file: "/etc/netplan/01-netcfg.yaml"
+    
+  tasks:
+    #==========================================================================
+    # Vorbereitungen und Validierung
+    #==========================================================================
+    
+    - name: Prüfe ob Ubuntu
+      fail:
+        msg: "Dieses Playbook ist nur für Ubuntu! Verwenden Sie network-update.yml für RHEL/Oracle Linux."
+      when: ansible_distribution != "Ubuntu"
+
+    - name: Prüfe Ubuntu Version
+      debug:
+        msg: "Ubuntu Version: {{ ansible_distribution_version }}"
+
+    - name: Erstelle Backup- und Log-Verzeichnisse
+      delegate_to: localhost
+      become: no
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ backup_dir }}"
+        - "{{ log_dir }}"
+      run_once: yes
+
+    - name: Prüfe ob CSV-Datei existiert
+      delegate_to: localhost
+      become: no
+      stat:
+        path: "{{ csv_file }}"
+      register: csv_stat
+      failed_when: not csv_stat.stat.exists
+
+    - name: Lese CSV-Datei ein
+      delegate_to: localhost
+      become: no
+      read_csv:
+        path: "{{ csv_file }}"
+        delimiter: ';'
+        skipinitialspace: yes
+      register: csv_data
+
+    - name: Debug - Zeige Anzahl CSV-Einträge
+      debug:
+        msg: "CSV-Datei enthält {{ csv_data.list | length }} Einträge"
+
+    - name: Debug - Zeige alle Hostnamen aus CSV
+      debug:
+        msg: "{{ csv_data.list | map(attribute='Hostname-alt') | list }}"
+
+    - name: Hole aktuellen Hostname (short) vom Zielsystem
+      command: hostname -s
+      register: current_hostname_short
+      changed_when: false
+
+    - name: Hole FQDN vom Zielsystem
+      command: hostname -f
+      register: current_hostname_fqdn
+      changed_when: false
+      failed_when: false
+
+    - name: Debug - Zeige rohe Hostname-Ausgaben
+      debug:
+        msg:
+          - "hostname -s output: '{{ current_hostname_short.stdout }}'"
+          - "hostname -f output: '{{ current_hostname_fqdn.stdout }}'"
+          - "ansible_hostname: '{{ ansible_hostname }}'"
+          - "ansible_fqdn: '{{ ansible_fqdn }}'"
+
+    - name: Setze aktuellen Hostname (mit Fallback auf Ansible Facts)
+      set_fact:
+        current_hostname_short_name: "{{ current_hostname_short.stdout | default(ansible_hostname, true) }}"
+        current_hostname_fqdn_name: "{{ current_hostname_fqdn.stdout | default(ansible_fqdn, true) }}"
+
+    - name: Debug - Zeige aktuelle Hostnamen
+      debug:
+        msg:
+          - "=== HOSTNAME IDENTIFIKATION ==="
+          - "Hostname (short): {{ current_hostname_short_name }}"
+          - "Hostname (FQDN): {{ current_hostname_fqdn_name }}"
+
+    - name: Suche passenden Eintrag in CSV (FQDN exakt)
+      set_fact:
+        host_config: "{{ csv_data.list | selectattr('Hostname-alt', 'equalto', current_hostname_fqdn_name) | list | first | default({}) }}"
+
+    - name: Debug - Ergebnis FQDN-Suche
+      debug:
+        msg: "FQDN-Suche: {{ 'Gefunden' if host_config != {} else 'Nicht gefunden' }}"
+
+    - name: Suche passenden Eintrag in CSV (short name mit Regex) falls FQDN nicht gefunden
+      set_fact:
+        host_config: "{{ csv_data.list | selectattr('Hostname-alt', 'search', '^' + current_hostname_short_name + '\\.') | list | first | default({}) }}"
+      when: host_config == {}
+
+    - name: Debug - Ergebnis Short-Name-Suche
+      debug:
+        msg: "Short-Name-Suche: {{ 'Gefunden' if host_config != {} else 'Nicht gefunden' }}"
+      when: host_config != {}
+
+    - name: Prüfe ob Host in CSV gefunden wurde
+      fail:
+        msg: |
+          FEHLER: Hostname wurde nicht in der CSV-Datei gefunden!
+          Hostname (short): {{ current_hostname_short_name }}
+          Hostname (FQDN): {{ current_hostname_fqdn_name }}
+          
+          Verfügbare Hostnamen in CSV:
+          {{ csv_data.list | map(attribute='Hostname-alt') | list | join('\n') }}
+      when: host_config == {}
+
+    - name: Debug - Zeige ALLE identifizierten Felder
+      debug:
+        msg:
+          - "=== IDENTIFIZIERTE KONFIGURATION ==="
+          - "Aktueller Hostname: {{ current_hostname_fqdn_name }}"
+          - ""
+          - "Gefundener CSV-Eintrag:"
+          - "  Hostname-alt: {{ host_config['Hostname-alt'] | default('NICHT GEFUNDEN') }}"
+          - "  Hostname-neu: {{ host_config['Hostname-neu'] | default('NICHT GEFUNDEN') }}"
+          - "  Ip-alt (9.x): {{ host_config['Ip-alt'] | default('NICHT GEFUNDEN') }}"
+          - "  ip-neu (9.x): {{ host_config['ip-neu'] | default('NICHT GEFUNDEN') }}"
+          - "  10-alt (10.x): {{ host_config['10-alt'] | default('NICHT GEFUNDEN') }}"
+          - "  10-neu (10.x): {{ host_config['10-neu'] | default('NICHT GEFUNDEN') }}"
+          - ""
+          - "Vollständiger Eintrag:"
+          - "{{ host_config }}"
+
+    #==========================================================================
+    # Identifiziere Netzwerkschnittstellen
+    #==========================================================================
+
+    - name: Hole alle Netzwerkschnittstellen
+      shell: |
+        ip -o addr show | grep -E 'inet ' | awk '{print $2, $4}' | grep -v '127.0.0.1'
+      register: network_interfaces
+      changed_when: false
+      check_mode: no
+
+    - name: Debug - Zeige alle gefundenen Interfaces
+      debug:
+        msg: "{{ network_interfaces.stdout_lines }}"
+
+    - name: Parse Netzwerkschnittstellen
+      set_fact:
+        interfaces_info: "{{ network_interfaces.stdout_lines }}"
+
+    - name: Identifiziere Interface mit 9.x IP
+      set_fact:
+        interface_9x: "{{ item.split()[0] }}"
+        current_ip_9x: "{{ item.split()[1].split('/')[0] }}"
+      when: item.split()[1] | regex_search('^9\\.')
+      loop: "{{ interfaces_info }}"
+
+    - name: Identifiziere Interface mit 10.x IP (suche nach CSV IP)
+      set_fact:
+        interface_10x: "{{ item.split()[0] }}"
+        current_ip_10x: "{{ item.split()[1].split('/')[0] }}"
+      when: 
+        - item.split()[1] | regex_search('^10\\.')
+        - item.split()[1].split('/')[0] == host_config['10-alt']
+      loop: "{{ interfaces_info }}"
+
+    - name: Identifiziere Interface mit beliebiger 10.x IP falls CSV-IP nicht gefunden
+      set_fact:
+        interface_10x: "{{ item.split()[0] }}"
+        current_ip_10x: "{{ item.split()[1].split('/')[0] }}"
+      when: 
+        - interface_10x is not defined
+        - item.split()[1] | regex_search('^10\\.10\\.')
+      loop: "{{ interfaces_info }}"
+
+    - name: Setze 10.x Interface auf 9.x Interface falls nicht gefunden (beide IPs auf einem Interface)
+      set_fact:
+        interface_10x: "{{ interface_9x }}"
+        current_ip_10x: "nicht konfiguriert"
+      when: interface_10x is not defined and interface_9x is defined
+
+    - name: Validiere dass mindestens 9.x Interface gefunden wurde
+      fail:
+        msg: |
+          FEHLER: Konnte kein Interface mit 9.x IP identifizieren!
+          Gefundene Interfaces: {{ interfaces_info }}
+      when: interface_9x is not defined
+
+    - name: Zeige identifizierte Interfaces
+      debug:
+        msg:
+          - "=== NETZWERK-INTERFACES ==="
+          - "Interface 9.x: {{ interface_9x }} ({{ current_ip_9x }})"
+          - "Interface 10.x: {{ interface_10x }} ({{ current_ip_10x }})"
+          - "Hinweis: Beide IPs {{ 'sind auf demselben Interface' if interface_9x == interface_10x else 'sind auf verschiedenen Interfaces' }}"
+
+    #==========================================================================
+    # Validierung der aktuellen Konfiguration
+    #==========================================================================
+
+    - name: Validiere aktuelle IP-Adressen gegen CSV
+      block:
+        - name: Prüfe 9.x IP
+          assert:
+            that:
+              - current_ip_9x == host_config['Ip-alt']
+            fail_msg: |
+              FEHLER: 9.x IP stimmt nicht überein!
+              Erwartet: {{ host_config['Ip-alt'] }}
+              Gefunden: {{ current_ip_9x }}
+            success_msg: "9.x IP validiert: {{ current_ip_9x }}"
+
+        - name: Prüfe 10.x IP (falls konfiguriert)
+          assert:
+            that:
+              - current_ip_10x == host_config['10-alt'] or current_ip_10x == 'nicht konfiguriert'
+            fail_msg: |
+              FEHLER: 10.x IP stimmt nicht überein!
+              Erwartet: {{ host_config['10-alt'] }}
+              Gefunden: {{ current_ip_10x }}
+            success_msg: "10.x IP validiert: {{ current_ip_10x }}"
+          
+        - name: Warnung wenn 10.x IP nicht konfiguriert ist
+          debug:
+            msg: "WARNUNG: 10.x IP ist aktuell nicht konfiguriert. Sie wird hinzugefügt."
+          when: current_ip_10x == 'nicht konfiguriert'
+
+    - name: Validierung erfolgreich
+      debug:
+        msg: "✓ System erfolgreich identifiziert. Änderungen können durchgeführt werden."
+
+    #==========================================================================
+    # Backup der aktuellen Konfiguration
+    #==========================================================================
+
+    - name: Erstelle Backup-Verzeichnis für diesen Host
+      file:
+        path: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      become: no
+
+    - name: Backup Hostname-Konfiguration
+      fetch:
+        src: /etc/hostname
+        dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}/hostname"
+        flat: yes
+      failed_when: false
+
+    - name: Prüfe ob Netplan-Konfiguration existiert
+      stat:
+        path: "{{ netplan_config_file }}"
+      register: netplan_stat
+
+    - name: Backup Netplan-Konfiguration
+      fetch:
+        src: "{{ netplan_config_file }}"
+        dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}/01-netcfg.yaml"
+        flat: yes
+      when: netplan_stat.stat.exists
+      failed_when: false
+
+    - name: Backup alle Netplan-Dateien
+      shell: "tar czf /tmp/netplan_backup_{{ ansible_date_time.epoch }}.tar.gz /etc/netplan/"
+      args:
+        warn: false
+      changed_when: false
+      failed_when: false
+
+    - name: Hole Netplan-Backup
+      fetch:
+        src: "/tmp/netplan_backup_{{ ansible_date_time.epoch }}.tar.gz"
+        dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}/netplan_backup.tar.gz"
+        flat: yes
+      failed_when: false
+
+    #==========================================================================
+    # Hostname ändern
+    #==========================================================================
+
+    - name: Setze neuen Hostname in /etc/hostname
+      copy:
+        content: "{{ host_config['Hostname-neu'].split('.')[0] }}\n"
+        dest: /etc/hostname
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+
+    - name: Setze neuen Hostname mit hostnamectl
+      command: "hostnamectl set-hostname {{ host_config['Hostname-neu'] }}"
+      changed_when: true
+
+    - name: Update /etc/hosts mit neuem Hostname
+      lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1'
+        line: "127.0.1.1 {{ host_config['Hostname-neu'] }} {{ host_config['Hostname-neu'].split('.')[0] }}"
+        backup: yes
+
+    #==========================================================================
+    # Netplan Konfiguration erstellen
+    #==========================================================================
+
+    - name: Erstelle Netplan-Konfiguration
+      template:
+        src: ../templates/netplan-template.j2
+        dest: "{{ netplan_config_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      vars:
+        primary_interface: "{{ interface_9x }}"
+        primary_ip: "{{ host_config['ip-neu'] }}"
+        secondary_interface: "{{ interface_10x }}"
+        secondary_ip: "{{ host_config['10-neu'] }}"
+        gateway: "{{ new_gateway }}"
+        prefix: "{{ new_prefix }}"
+        same_interface: "{{ interface_9x == interface_10x }}"
+
+    - name: Validiere Netplan-Konfiguration
+      command: netplan generate
+      register: netplan_generate
+      changed_when: false
+      failed_when: netplan_generate.rc != 0
+
+    - name: Zeige Netplan-Validierung
+      debug:
+        msg: "✓ Netplan-Konfiguration ist valide"
+
+    #==========================================================================
+    # Netzwerk neu starten
+    #==========================================================================
+
+    - name: Warnung vor Netzwerk-Neustart
+      debug:
+        msg:
+          - "⚠️  ACHTUNG: Netzwerk wird jetzt neu gestartet!"
+          - "Die SSH-Verbindung wird unterbrochen."
+          - "Das ist normal und erwartet."
+          - "Warten Sie 30 Sekunden und verbinden Sie sich dann mit der neuen IP."
+
+    - name: Wende Netplan-Konfiguration an (Asynchron)
+      shell: |
+        sleep 2
+        netplan apply
+      async: 30
+      poll: 0
+      register: netplan_apply
+      failed_when: false
+
+    - name: Hinweis nach Netzwerk-Neustart
+      debug:
+        msg:
+          - "✓ Netzwerk-Neustart wurde initiiert"
+          - "Die Verbindung wird jetzt unterbrochen"
+          - "Neue IP-Adresse: {{ host_config['ip-neu'] }}"
+          - "Verbinden Sie sich in 30 Sekunden mit: ssh root@{{ host_config['ip-neu'] }}"
+
+    #==========================================================================
+    # Abschluss (Validierung erfolgt nach Neuverbindung)
+    #==========================================================================
+
+    - name: Zeige Zusammenfassung
+      debug:
+        msg:
+          - "=========================================="
+          - "✓ MIGRATION ABGESCHLOSSEN"
+          - "=========================================="
+          - ""
+          - "Durchgeführte Änderungen:"
+          - "  Hostname: {{ host_config['Hostname-alt'] }} → {{ host_config['Hostname-neu'] }}"
+          - "  9.x IP: {{ host_config['Ip-alt'] }} → {{ host_config['ip-neu'] }}"
+          - "  10.x IP: {{ host_config['10-alt'] }} → {{ host_config['10-neu'] }}"
+          - "  Gateway: {{ new_gateway }}"
+          - "  Netmask: {{ new_netmask }}"
+          - ""
+          - "⚠️  WICHTIG:"
+          - "  - Die SSH-Verbindung wurde unterbrochen (normal)"
+          - "  - Warten Sie 30 Sekunden"
+          - "  - Verbinden Sie sich mit der neuen IP:"
+          - "    ssh root@{{ host_config['ip-neu'] }}"
+          - ""
+          - "Validierung nach Neuverbindung:"
+          - "  hostname -f"
+          - "  ip addr show"
+          - "  ping -c 3 {{ new_gateway }}"
+          - "  netplan status"
+          - ""
+          - "Backup-Verzeichnis:"
+          - "  {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}"
+          - ""
+          - "Bei Problemen Rollback durchführen:"
+          - "  sudo ./rollback-ubuntu.sh"
+          - "=========================================="
+
+    #==========================================================================
+    # Logging
+    #==========================================================================
+
+    - name: Erstelle Change-Log
+      delegate_to: localhost
+      become: no
+      copy:
+        content: |
+          ================================================================================
+          Ubuntu Netzwerkkonfiguration Update Log
+          ================================================================================
+          Datum: {{ ansible_date_time.iso8601 }}
+          Host: {{ inventory_hostname }}
+          Ubuntu Version: {{ ansible_distribution_version }}
+          
+          ÄNDERUNGEN:
+          -----------
+          Hostname:
+            Alt: {{ host_config['Hostname-alt'] }}
+            Neu: {{ host_config['Hostname-neu'] }}
+          
+          Interface {{ interface_9x }} (9.x Netzwerk):
+            IP Alt: {{ host_config['Ip-alt'] }}
+            IP Neu: {{ host_config['ip-neu'] }}
+            Gateway: {{ new_gateway }}
+            Prefix: /{{ new_prefix }}
+          
+          Interface {{ interface_10x }} (10.x Netzwerk):
+            IP Alt: {{ host_config['10-alt'] }}
+            IP Neu: {{ host_config['10-neu'] }}
+            Prefix: /{{ new_prefix }}
+          
+          Netplan-Konfiguration:
+            Datei: {{ netplan_config_file }}
+            Beide IPs auf einem Interface: {{ 'Ja' if interface_9x == interface_10x else 'Nein' }}
+          
+          STATUS:
+          -------
+          Migration erfolgreich durchgeführt
+          Netplan-Konfiguration angewendet
+          
+          VALIDIERUNG:
+          ------------
+          Bitte nach Neuverbindung validieren:
+            - hostname -f  (sollte {{ host_config['Hostname-neu'] }} sein)
+            - ip addr show (sollte {{ host_config['ip-neu'] }} und {{ host_config['10-neu'] }} zeigen)
+            - ping -c 3 {{ new_gateway }}
+            - netplan status
+          
+          Neue Verbindung:
+            ssh root@{{ host_config['ip-neu'] }}
+          
+          Backup-Verzeichnis: 
+            {{ backup_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}
+          
+          Bei Problemen Rollback durchführen:
+            sudo ./rollback-ubuntu.sh
+          ================================================================================
+        dest: "{{ log_dir }}/{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}.log"
+
+# Made with Bob

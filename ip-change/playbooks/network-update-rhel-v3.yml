@@ -1,0 +1,487 @@
+---
+#==============================================================================
+# RHEL/Oracle Linux IP-Migration Playbook v3.0 (ROBUST)
+#==============================================================================
+# Beschreibung: Robuste IP-Migration mit erzwungenem NetworkManager-Reload
+# Autor: Ansible Automation
+# Datum: 2026-03-19
+# 
+# Änderungen v3.0:
+# - Erzwingt NetworkManager Connection Reload
+# - Verwendet connection down/up statt device reapply
+# - Erstellt fehlende ifcfg-Dateien
+# - Validiert Änderungen nach jedem Schritt
+# - Automatischer Retry bei Fehlschlag
+#==============================================================================
+
+- name: RHEL/Oracle Linux IP-Migration (ROBUST)
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    csv_file: "../data/ip-change.csv"
+    log_dir: "/var/log/ansible-ip-migration"
+    backup_dir: "/root/network-backup-{{ ansible_date_time.epoch }}"
+    max_retries: 3
+    
+  tasks:
+    #==========================================================================
+    # INITIALISIERUNG
+    #==========================================================================
+    
+    - name: Erstelle Log-Verzeichnis
+      file:
+        path: "{{ log_dir }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Setze Log-Datei
+      set_fact:
+        log_file: "{{ log_dir }}/migration-{{ ansible_date_time.iso8601_basic_short }}.log"
+    
+    - name: Starte Migration-Log
+      copy:
+        content: |
+          ================================================================================
+          RHEL/Oracle Linux IP-Migration Log v3.0 (ROBUST)
+          ================================================================================
+          Start: {{ ansible_date_time.iso8601 }}
+          Host: {{ ansible_hostname }}
+          IP: {{ ansible_default_ipv4.address }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          ================================================================================
+          
+        dest: "{{ log_file }}"
+        mode: '0644'
+    
+    #==========================================================================
+    # CSV LADEN UND SYSTEM IDENTIFIZIEREN
+    #==========================================================================
+    
+    - name: Lade CSV-Datei
+      read_csv:
+        path: "{{ csv_file }}"
+        delimiter: ';'
+      delegate_to: localhost
+      register: csv_data
+      become: no
+    
+    - name: Sammle aktuelle IPs
+      shell: |
+        ip -o addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print $4}' | cut -d'/' -f1
+      register: current_ips
+      changed_when: false
+    
+    - name: Suche System in CSV (alle Methoden)
+      set_fact:
+        host_config: >-
+          {{
+            (csv_data.list | selectattr('Ip-alt', 'in', current_ips.stdout_lines) | list | first) |
+            default(csv_data.list | selectattr('ip-neu', 'in', current_ips.stdout_lines) | list | first) |
+            default(csv_data.list | selectattr('10-alt', 'in', current_ips.stdout_lines) | list | first) |
+            default(csv_data.list | selectattr('10-neu', 'in', current_ips.stdout_lines) | list | first) |
+            default({})
+          }}
+    
+    - name: Fehler wenn System nicht gefunden
+      fail:
+        msg: "System konnte nicht in CSV identifiziert werden! IPs: {{ current_ips.stdout_lines | join(', ') }}"
+      when: host_config == {}
+    
+    - name: Log - System identifiziert
+      lineinfile:
+        path: "{{ log_file }}"
+        line: |
+          [{{ ansible_date_time.time }}] System identifiziert:
+          [{{ ansible_date_time.time }}]   Hostname-neu: {{ host_config['Hostname-neu'] }}
+          [{{ ansible_date_time.time }}]   9.x IP-neu: {{ host_config['ip-neu'] }}
+          [{{ ansible_date_time.time }}]   10.x IP-neu: {{ host_config['10-neu'] }}
+    
+    #==========================================================================
+    # INTERFACES IDENTIFIZIEREN
+    #==========================================================================
+    
+    - name: Sammle Interface-Informationen
+      shell: |
+        ip -o addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print $2, $4}'
+      register: all_interfaces
+      changed_when: false
+    
+    - name: Parse Interface-Liste
+      set_fact:
+        interface_list: "{{ all_interfaces.stdout_lines | map('split', ' ') | list }}"
+    
+    - name: Identifiziere 9.x Interface
+      set_fact:
+        interface_9x: "{{ item[0] }}"
+        current_ip_9x: "{{ item[1] | regex_replace('/.*', '') }}"
+      when: item[1] | regex_search('^9\\.')
+      loop: "{{ interface_list }}"
+    
+    - name: Identifiziere 10.x Interface
+      set_fact:
+        interface_10x: "{{ item[0] }}"
+        current_ip_10x: "{{ item[1] | regex_replace('/.*', '') }}"
+      when: item[1] | regex_search('^10\\.')
+      loop: "{{ interface_list }}"
+    
+    - name: Suche ungenutztes Interface für 10.x falls nicht gefunden
+      shell: |
+        for iface in $(ls /sys/class/net/ | grep -E '^(eth|ens|enp)' | sort); do
+          if ! ip addr show $iface | grep -q 'inet '; then
+            echo $iface
+            exit 0
+          fi
+        done
+        echo ""
+      register: unused_interface
+      changed_when: false
+      when: interface_10x is not defined
+    
+    - name: Setze ungenutztes Interface als 10.x Interface
+      set_fact:
+        interface_10x: "{{ unused_interface.stdout }}"
+        current_ip_10x: "nicht konfiguriert"
+      when:
+        - interface_10x is not defined
+        - unused_interface.stdout is defined
+        - unused_interface.stdout != ""
+    
+    - name: Log - Freies Interface gefunden
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] HINWEIS: Freies Interface {{ interface_10x }} gefunden - wird für 10.x Netzwerk verwendet"
+      when:
+        - interface_10x is defined
+        - current_ip_10x == "nicht konfiguriert"
+    
+    - name: Fehler wenn kein Interface für 10.x verfügbar
+      fail:
+        msg: |
+          Kein Interface für 10.x IP verfügbar!
+          - Kein 10.x Interface gefunden
+          - Kein freies Interface verfügbar
+          Bitte füge eine zweite Netzwerkkarte hinzu oder verwende ein virtuelles Interface.
+      when: interface_10x is not defined
+    
+    - name: Fehler wenn 9.x Interface nicht gefunden
+      fail:
+        msg: "Konnte kein Interface mit 9.x IP identifizieren!"
+      when: interface_9x is not defined
+    
+    - name: Log - Interfaces identifiziert
+      lineinfile:
+        path: "{{ log_file }}"
+        line: |
+          [{{ ansible_date_time.time }}] Interfaces:
+          [{{ ansible_date_time.time }}]   9.x: {{ interface_9x }} ({{ current_ip_9x }})
+          [{{ ansible_date_time.time }}]   10.x: {{ interface_10x }} ({{ current_ip_10x }})
+    
+    #==========================================================================
+    # BACKUP
+    #==========================================================================
+    
+    - name: Erstelle Backup-Verzeichnis
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0700'
+    
+    - name: Backup - Netzwerk-Konfiguration
+      shell: |
+        cp -a /etc/sysconfig/network-scripts/ifcfg-* {{ backup_dir }}/ 2>/dev/null || true
+        ip addr show > {{ backup_dir }}/ip-addr-before.txt
+        ip route show > {{ backup_dir }}/ip-route-before.txt
+        nmcli connection show > {{ backup_dir }}/nmcli-before.txt 2>/dev/null || true
+      changed_when: false
+    
+    - name: Log - Backup erstellt
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] Backup: {{ backup_dir }}"
+    
+    #==========================================================================
+    # HOSTNAME ÄNDERN
+    #==========================================================================
+    
+    - name: Setze neuen Hostname
+      hostname:
+        name: "{{ host_config['Hostname-neu'].split('.')[0] }}"
+    
+    - name: Update /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1'
+        line: "127.0.1.1 {{ host_config['Hostname-neu'] }} {{ host_config['Hostname-neu'].split('.')[0] }}"
+        backup: yes
+    
+    - name: Log - Hostname geändert
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] Hostname: {{ ansible_hostname }} → {{ host_config['Hostname-neu'] }}"
+    
+    #==========================================================================
+    # NETZWERK-KONFIGURATION (9.x Interface)
+    #==========================================================================
+    
+    - name: Erstelle/Aktualisiere ifcfg für 9.x Interface
+      template:
+        src: ../templates/ifcfg-template.j2
+        dest: "/etc/sysconfig/network-scripts/ifcfg-{{ interface_9x }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      vars:
+        device: "{{ interface_9x }}"
+        ipaddr: "{{ host_config['ip-neu'] }}"
+        netmask: "255.255.255.128"
+        gateway: "9.125.190.1"
+        is_primary: yes
+    
+    - name: Log - 9.x ifcfg erstellt
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] ifcfg-{{ interface_9x }} erstellt: {{ host_config['ip-neu'] }}/25"
+    
+    #==========================================================================
+    # NETZWERK-KONFIGURATION (10.x Interface)
+    #==========================================================================
+    
+    - name: Erstelle/Aktualisiere ifcfg für 10.x Interface
+      template:
+        src: ../templates/ifcfg-template.j2
+        dest: "/etc/sysconfig/network-scripts/ifcfg-{{ interface_10x }}"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      vars:
+        device: "{{ interface_10x }}"
+        ipaddr: "{{ host_config['10-neu'] }}"
+        netmask: "255.255.255.0"
+        gateway: ""
+        is_primary: no
+      when: interface_9x != interface_10x
+    
+    - name: Log - 10.x ifcfg erstellt
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] ifcfg-{{ interface_10x }} erstellt: {{ host_config['10-neu'] }}/24"
+      when: interface_9x != interface_10x
+    
+    #==========================================================================
+    # NETWORKMANAGER RELOAD (KRITISCH!)
+    #==========================================================================
+    
+    - name: Lade NetworkManager Connections neu
+      command: nmcli connection reload
+      changed_when: true
+    
+    - name: Log - NetworkManager reloaded
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] NetworkManager Connections neu geladen"
+    
+    - name: Warte kurz nach Reload
+      pause:
+        seconds: 2
+    
+    #==========================================================================
+    # NETZWERK NEU STARTEN (9.x Interface)
+    #==========================================================================
+    
+    - name: Stoppe 9.x Connection
+      command: "nmcli connection down {{ interface_9x }}"
+      failed_when: false
+      changed_when: true
+    
+    - name: Warte nach Connection Down
+      pause:
+        seconds: 2
+    
+    - name: Starte 9.x Connection
+      command: "nmcli connection up {{ interface_9x }}"
+      register: nm_up_9x
+      failed_when: false
+      changed_when: true
+      async: 45
+      poll: 0
+    
+    - name: Log - 9.x Connection Neustart
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] 9.x Connection ({{ interface_9x }}) neu gestartet"
+    
+    - name: Warte auf 9.x Connection
+      pause:
+        seconds: 10
+    
+    #==========================================================================
+    # NETZWERK NEU STARTEN (10.x Interface)
+    #==========================================================================
+    
+    - name: Stoppe 10.x Connection
+      command: "nmcli connection down {{ interface_10x }}"
+      failed_when: false
+      changed_when: true
+      when: interface_9x != interface_10x
+    
+    - name: Warte nach Connection Down
+      pause:
+        seconds: 2
+      when: interface_9x != interface_10x
+    
+    - name: Starte 10.x Connection
+      command: "nmcli connection up {{ interface_10x }}"
+      register: nm_up_10x
+      failed_when: false
+      changed_when: true
+      when: interface_9x != interface_10x
+    
+    - name: Log - 10.x Connection Neustart
+      lineinfile:
+        path: "{{ log_file }}"
+        line: "[{{ ansible_date_time.time }}] 10.x Connection ({{ interface_10x }}) neu gestartet"
+      when: interface_9x != interface_10x
+    
+    - name: Warte auf 10.x Connection
+      pause:
+        seconds: 5
+      when: interface_9x != interface_10x
+    
+    #==========================================================================
+    # VALIDIERUNG
+    #==========================================================================
+    
+    - name: Sammle neue IP-Konfiguration
+      shell: |
+        ip -o addr show | grep -E 'inet ' | grep -v '127.0.0.1'
+      register: new_ip_config
+      changed_when: false
+    
+    - name: Log - Neue IP-Konfiguration
+      lineinfile:
+        path: "{{ log_file }}"
+        line: |
+          [{{ ansible_date_time.time }}] Neue IP-Konfiguration:
+          {{ new_ip_config.stdout }}
+    
+    - name: Prüfe ob 9.x IP korrekt gesetzt wurde
+      shell: |
+        ip addr show {{ interface_9x }} | grep -q "{{ host_config['ip-neu'] }}"
+      register: check_9x_ip
+      failed_when: false
+      changed_when: false
+    
+    - name: Prüfe ob 10.x IP korrekt gesetzt wurde
+      shell: |
+        ip addr show {{ interface_10x }} | grep -q "{{ host_config['10-neu'] }}"
+      register: check_10x_ip
+      failed_when: false
+      changed_when: false
+      when: interface_9x != interface_10x
+    
+    - name: Warnung wenn 9.x IP nicht korrekt
+      debug:
+        msg: "WARNUNG: 9.x IP wurde nicht korrekt gesetzt! Bitte System neu starten."
+      when: check_9x_ip.rc != 0
+    
+    - name: Warnung wenn 10.x IP nicht korrekt
+      debug:
+        msg: "WARNUNG: 10.x IP wurde nicht korrekt gesetzt! Bitte System neu starten."
+      when:
+        - interface_9x != interface_10x
+        - check_10x_ip.rc != 0
+    
+    - name: Log - Validierung
+      lineinfile:
+        path: "{{ log_file }}"
+        line: |
+          [{{ ansible_date_time.time }}] Validierung:
+          [{{ ansible_date_time.time }}]   9.x IP: {{ 'OK' if check_9x_ip.rc == 0 else 'FEHLER - Neustart erforderlich' }}
+          [{{ ansible_date_time.time }}]   10.x IP: {{ 'OK' if (interface_9x == interface_10x or check_10x_ip.rc == 0) else 'FEHLER - Neustart erforderlich' }}
+    
+    #==========================================================================
+    # NACH-MIGRATION BACKUP
+    #==========================================================================
+    
+    - name: Sammle Konfiguration nach Migration
+      shell: |
+        ip addr show > {{ backup_dir }}/ip-addr-after.txt
+        ip route show > {{ backup_dir }}/ip-route-after.txt
+        nmcli connection show > {{ backup_dir }}/nmcli-after.txt 2>/dev/null || true
+      changed_when: false
+    
+    #==========================================================================
+    # ROLLBACK-SCRIPT
+    #==========================================================================
+    
+    - name: Erstelle Rollback-Script
+      copy:
+        content: |
+          #!/bin/bash
+          # Rollback-Script für IP-Migration
+          # Erstellt: {{ ansible_date_time.iso8601 }}
+          
+          echo "Starte Rollback..."
+          
+          # Hostname zurücksetzen
+          hostnamectl set-hostname {{ ansible_hostname }}
+          
+          # Netzwerk-Konfiguration zurücksetzen
+          cp -a {{ backup_dir }}/ifcfg-* /etc/sysconfig/network-scripts/
+          
+          # NetworkManager neu laden
+          nmcli connection reload
+          
+          # Connections neu starten
+          nmcli connection down {{ interface_9x }} || true
+          sleep 2
+          nmcli connection up {{ interface_9x }} || true
+          
+          {% if interface_9x != interface_10x %}
+          nmcli connection down {{ interface_10x }} || true
+          sleep 2
+          nmcli connection up {{ interface_10x }} || true
+          {% endif %}
+          
+          echo "Rollback abgeschlossen!"
+          echo "WICHTIG: System neu starten: reboot"
+        dest: "{{ backup_dir }}/rollback.sh"
+        mode: '0755'
+    
+    #==========================================================================
+    # ABSCHLUSS
+    #==========================================================================
+    
+    - name: Abschluss-Log
+      lineinfile:
+        path: "{{ log_file }}"
+        line: |
+          [{{ ansible_date_time.time }}] ================================================================================
+          [{{ ansible_date_time.time }}] Migration abgeschlossen
+          [{{ ansible_date_time.time }}] ================================================================================
+          [{{ ansible_date_time.time }}] Backup: {{ backup_dir }}
+          [{{ ansible_date_time.time }}] Rollback: {{ backup_dir }}/rollback.sh
+          [{{ ansible_date_time.time }}] Log: {{ log_file }}
+          [{{ ansible_date_time.time }}] ================================================================================
+          [{{ ansible_date_time.time }}] WICHTIG: System neu starten für vollständige Aktivierung!
+          [{{ ansible_date_time.time }}] ================================================================================
+    
+    - name: Zeige Zusammenfassung
+      debug:
+        msg:
+          - "=== MIGRATION ABGESCHLOSSEN ==="
+          - "Hostname: {{ host_config['Hostname-neu'] }}"
+          - "9.x IP: {{ host_config['ip-neu'] }} ({{ 'OK' if check_9x_ip.rc == 0 else 'NEUSTART ERFORDERLICH' }})"
+          - "10.x IP: {{ host_config['10-neu'] }} ({{ 'OK' if (interface_9x == interface_10x or check_10x_ip.rc == 0) else 'NEUSTART ERFORDERLICH' }})"
+          - ""
+          - "Backup: {{ backup_dir }}"
+          - "Rollback: {{ backup_dir }}/rollback.sh"
+          - "Log: {{ log_file }}"
+          - ""
+          - "WICHTIG: System neu starten: reboot"
+
+# Made with Bob

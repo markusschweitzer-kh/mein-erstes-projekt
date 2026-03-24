@@ -1,0 +1,22 @@
+# Binary
+/must-gather-clean
+/jsonschema
+
+# Goland IDE
+.idea
+
+# Tools Directory
+bin/
+
+# reports created by debugging/testing
+/report.yaml
+
+# Compiled files
+/dist
+
+# end2end tests
+pkg/cli/testfiles/aws
+pkg/cli/testfiles/aws.cleaned
+test/files/testrun-*
+
+/.claude/

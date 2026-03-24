@@ -1,0 +1,211 @@
+---
+#==============================================================================
+# IP-Migrations-Status-Checker (Ansible Version)
+#==============================================================================
+# Beschreibung: Prüft alle Hosts aus CSV auf vollständigen Migrations-Status
+# Autor: Ansible Automation
+# Datum: 2026-03-23
+# 
+# Prüft: 9.x IP, 10.x IP, Hostname, DNS-Server
+# Verwendung: ansible-playbook check-migration-status.yml
+#==============================================================================
+
+- name: IP-Migrations-Status prüfen - Vorbereitung
+  hosts: localhost
+  gather_facts: no
+  become: no
+  
+  vars:
+    csv_file: "../data/ip-change.csv"
+    ssh_timeout: 5
+    
+  tasks:
+    - name: Lade CSV-Datei
+      read_csv:
+        path: "{{ csv_file }}"
+        delimiter: ';'
+      register: csv_data
+    
+    - name: Erstelle dynamisches Inventory (nur neue IPs)
+      add_host:
+        name: "{{ item['Hostname-neu'] }}"
+        groups: migration_check
+        ansible_host: "{{ item['ip-neu'] }}"
+        hostname_neu: "{{ item['Hostname-neu'] }}"
+        ip_neu: "{{ item['ip-neu'] }}"
+        ip_10_neu: "{{ item['10-neu'] }}"
+      loop: "{{ csv_data.list }}"
+      loop_control:
+        label: "{{ item['Hostname-neu'] }}"
+
+#==============================================================================
+# HOSTS PRÜFEN
+#==============================================================================
+
+- name: Prüfe Migrations-Status aller Hosts
+  hosts: migration_check
+  gather_facts: yes
+  become: yes
+  
+  vars:
+    ssh_timeout: 5
+    
+  tasks:
+    - name: Prüfe Erreichbarkeit
+      wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        timeout: "{{ ssh_timeout }}"
+        state: started
+      register: reachability_check
+      failed_when: false
+      delegate_to: localhost
+      become: no
+    
+    - name: Markiere als nicht erreichbar
+      set_fact:
+        host_unreachable: true
+      when: reachability_check.failed
+    
+    - name: Sammle Host-Informationen
+      block:
+        - name: Hole aktuellen Hostname
+          command: hostname -f
+          register: current_hostname_result
+          changed_when: false
+        
+        - name: Hole 9.x IP
+          shell: ip -o addr show | grep -E 'inet 9\.' | awk '{print $4}' | cut -d'/' -f1 | head -1
+          register: current_9x_ip
+          changed_when: false
+        
+        - name: Hole 10.x IP
+          shell: ip -o addr show | grep -E 'inet 10\.' | awk '{print $4}' | cut -d'/' -f1 | head -1
+          register: current_10x_ip
+          changed_when: false
+        
+        - name: Hole DNS-Server
+          shell: cat /etc/resolv.conf | grep -E '^nameserver' | awk '{print $2}' | tr '\n' ','
+          register: current_dns
+          changed_when: false
+        
+        - name: Bewerte Status
+          set_fact:
+            status_9x: "{{ 'OK' if current_9x_ip.stdout == ip_neu else 'FEHLER' }}"
+            status_10x: "{{ 'OK' if current_10x_ip.stdout == ip_10_neu else 'FEHLER' }}"
+            status_hostname: "{{ 'OK' if current_hostname_result.stdout == hostname_neu else 'FEHLER' }}"
+            status_dns: "{{ 'OK' if ('9.0.0.1' in current_dns.stdout and '9.0.0.2' in current_dns.stdout) else 'FEHLER' }}"
+        
+        - name: Bewerte Gesamt-Status
+          set_fact:
+            overall_status: "{{ 'OK' if (status_9x == 'OK' and status_10x == 'OK' and status_hostname == 'OK' and status_dns == 'OK') else 'FEHLER' }}"
+      
+      when: not reachability_check.failed
+
+#==============================================================================
+# ZUSAMMENFASSUNG
+#==============================================================================
+
+- name: Zeige Migrations-Status Zusammenfassung
+  hosts: localhost
+  gather_facts: no
+  
+  tasks:
+    - name: Sammle Ergebnisse
+      set_fact:
+        hosts_ok: "{{ groups['migration_check'] | map('extract', hostvars) | selectattr('overall_status', 'defined') | selectattr('overall_status', 'equalto', 'OK') | list }}"
+        hosts_failed: "{{ groups['migration_check'] | map('extract', hostvars) | selectattr('overall_status', 'defined') | selectattr('overall_status', 'equalto', 'FEHLER') | list }}"
+        hosts_unreachable: "{{ groups['migration_check'] | map('extract', hostvars) | selectattr('host_unreachable', 'defined') | selectattr('host_unreachable', 'equalto', true) | list }}"
+    
+    - name: Berechne Statistiken
+      set_fact:
+        total_hosts: "{{ groups['migration_check'] | length }}"
+        ok_count: "{{ hosts_ok | length }}"
+        failed_count: "{{ hosts_failed | length }}"
+        unreachable_count: "{{ hosts_unreachable | length }}"
+    
+    - name: Zeige Header
+      debug:
+        msg:
+          - "================================================================================"
+          - "                    IP-MIGRATIONS-STATUS ZUSAMMENFASSUNG"
+          - "================================================================================"
+          - ""
+          - "Gesamt: {{ total_hosts }} Hosts"
+          - ""
+          - "✓ Migration OK:        {{ ok_count }}"
+          - "✗ Migration FEHLER:    {{ failed_count }}"
+          - "✗ Nicht erreichbar:    {{ unreachable_count }}"
+          - ""
+    
+    - name: Zeige OK Hosts
+      debug:
+        msg: |
+          === MIGRATION OK ({{ ok_count }}) ===
+          {% for host in hosts_ok %}
+          ✓ {{ host.hostname_neu }}
+              9.x IP:  {{ host.ip_neu }} [{{ host.status_9x }}]
+              10.x IP: {{ host.ip_10_neu }} [{{ host.status_10x }}]
+              Hostname: [{{ host.status_hostname }}]
+              DNS: [{{ host.status_dns }}]
+          {% endfor %}
+      when: ok_count | int > 0
+    
+    - name: Zeige fehlerhafte Hosts
+      debug:
+        msg: |
+          === MIGRATION FEHLER ({{ failed_count }}) - AKTION ERFORDERLICH ===
+          {% for host in hosts_failed %}
+          ✗ {{ host.hostname_neu }}
+              9.x IP:  {{ host.status_9x }} (erwartet: {{ host.ip_neu }})
+              10.x IP: {{ host.status_10x }} (erwartet: {{ host.ip_10_neu }})
+              Hostname: {{ host.status_hostname }} (erwartet: {{ host.hostname_neu }})
+              DNS: {{ host.status_dns }} (erwartet: 9.0.0.1, 9.0.0.2)
+              → Bitte Konfiguration prüfen!
+          {% endfor %}
+      when: failed_count | int > 0
+    
+    - name: Zeige nicht erreichbare Hosts
+      debug:
+        msg: |
+          === NICHT ERREICHBARE HOSTS ({{ unreachable_count }}) - PRÜFUNG ERFORDERLICH ===
+          {% for host in hosts_unreachable %}
+          ✗ {{ host.hostname_neu }}
+              IP: {{ host.ip_neu }}
+              → Host ist nicht erreichbar!
+          {% endfor %}
+      when: unreachable_count | int > 0
+    
+    - name: Zeige Empfehlungen
+      debug:
+        msg: |
+          
+          === EMPFOHLENE AKTIONEN ===
+          
+          {% if failed_count | int > 0 %}Hosts mit Fehlern:
+            1. Prüfe welche Komponente fehlerhaft ist (9.x IP, 10.x IP, Hostname oder DNS)
+            2. Für IP-Probleme: ansible-playbook network-update-rhel-v3.yml
+            3. Für DNS-Probleme: ansible-playbook update-dns-config.yml
+          {% endif %}
+          
+          {% if unreachable_count | int > 0 %}Nicht erreichbare Hosts:
+            1. Prüfe ob Hosts online sind
+            2. Prüfe Netzwerk-Konnektivität (neue IP: 9.x)
+            3. Prüfe Firewall-Regeln
+          {% endif %}
+      when: (failed_count | int > 0) or (unreachable_count | int > 0)
+    
+    - name: Abschluss-Status
+      debug:
+        msg:
+          - ""
+          - "================================================================================"
+          - "{% if ok_count | int == total_hosts | int %}✓ Alle Hosts OK!{% elif failed_count | int > 0 %}⚠ Fehler gefunden - Aktion erforderlich{% else %}✗ Kritische Probleme gefunden{% endif %}"
+          - "================================================================================"
+    
+    - name: Setze Exit-Code
+      fail:
+        msg: "Migration unvollständig"
+      when: (failed_count | int > 0) or (unreachable_count | int > 0)
+
+# Made with Bob
