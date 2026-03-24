@@ -1,0 +1,245 @@
+---
+- name: Sammle Netzwerk-Konfiguration von allen Systemen
+  hosts: all
+  gather_facts: yes
+  become: yes
+  
+  vars:
+    output_dir: "../output"
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+    
+  tasks:
+    - name: Erstelle Output-Verzeichnis
+      delegate_to: localhost
+      run_once: true
+      file:
+        path: "{{ output_dir }}/network"
+        state: directory
+        mode: '0755'
+
+    - name: Erkenne OS-Familie
+      set_fact:
+        os_family: "{{ ansible_os_family | lower }}"
+
+    # RHEL/Oracle Linux Netzwerk-Informationen
+    - name: Sammle NetworkManager Verbindungen (RHEL/Oracle)
+      when: ansible_os_family == "RedHat"
+      block:
+        - name: Liste alle NetworkManager Verbindungen
+          command: nmcli connection show
+          register: nmcli_connections
+          ignore_errors: yes
+
+        - name: Hole Details für jede Verbindung
+          shell: |
+            for conn in $(nmcli -t -f NAME connection show); do
+              echo "=== Verbindung: $conn ==="
+              nmcli connection show "$conn"
+              echo ""
+            done
+          register: nmcli_details
+          ignore_errors: yes
+
+        - name: Lese ifcfg Dateien
+          shell: |
+            echo "=== Network Scripts ==="
+            for file in /etc/sysconfig/network-scripts/ifcfg-*; do
+              if [ -f "$file" ] && [[ ! "$file" =~ (lo|ifcfg-lo) ]]; then
+                echo "--- $file ---"
+                cat "$file"
+                echo ""
+              fi
+            done
+          register: ifcfg_files
+          ignore_errors: yes
+
+    # Ubuntu Netzwerk-Informationen
+    - name: Sammle Netplan Konfiguration (Ubuntu)
+      when: ansible_os_family == "Debian"
+      block:
+        - name: Lese Netplan Konfiguration
+          shell: |
+            echo "=== Netplan Konfiguration ==="
+            for file in /etc/netplan/*.yaml; do
+              if [ -f "$file" ]; then
+                echo "--- $file ---"
+                cat "$file"
+                echo ""
+              fi
+            done
+          register: netplan_config
+          ignore_errors: yes
+
+        - name: Netplan Status
+          command: netplan get
+          register: netplan_status
+          ignore_errors: yes
+
+    # SLES Netzwerk-Informationen
+    - name: Sammle wicked Konfiguration (SLES)
+      when: ansible_os_family == "Suse"
+      block:
+        - name: Lese wicked Konfiguration
+          shell: |
+            echo "=== Wicked Konfiguration ==="
+            for file in /etc/sysconfig/network/ifcfg-*; do
+              if [ -f "$file" ] && [[ ! "$file" =~ (lo|ifcfg-lo) ]]; then
+                echo "--- $file ---"
+                cat "$file"
+                echo ""
+              fi
+            done
+          register: wicked_config
+          ignore_errors: yes
+
+        - name: Wicked Status
+          command: wicked show all
+          register: wicked_status
+          ignore_errors: yes
+
+    # Allgemeine Netzwerk-Informationen (alle OS)
+    - name: IP Adressen und Interfaces
+      command: ip addr show
+      register: ip_addr
+
+    - name: Routing Tabelle
+      command: ip route show
+      register: ip_route
+
+    - name: DNS Konfiguration
+      command: cat /etc/resolv.conf
+      register: resolv_conf
+      ignore_errors: yes
+
+    - name: Hostname Konfiguration
+      command: hostnamectl
+      register: hostnamectl_output
+      ignore_errors: yes
+
+    - name: /etc/hosts Datei
+      command: cat /etc/hosts
+      register: etc_hosts
+
+    - name: Netzwerk-Statistiken
+      command: ss -tunap
+      register: network_stats
+      ignore_errors: yes
+
+    - name: Firewall Status (firewalld)
+      command: firewall-cmd --list-all
+      register: firewalld_status
+      ignore_errors: yes
+      when: ansible_os_family == "RedHat"
+
+    - name: Firewall Status (ufw)
+      command: ufw status verbose
+      register: ufw_status
+      ignore_errors: yes
+      when: ansible_os_family == "Debian"
+
+    # Speichere alle Informationen in einer Datei pro Host
+    - name: Erstelle Netzwerk-Report für Host
+      delegate_to: localhost
+      copy:
+        content: |
+          ================================================================================
+          NETZWERK-KONFIGURATION: {{ inventory_hostname }}
+          ================================================================================
+          Zeitstempel: {{ ansible_date_time.iso8601 }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Kernel: {{ ansible_kernel }}
+          
+          ================================================================================
+          HOSTNAME INFORMATION
+          ================================================================================
+          {{ hostnamectl_output.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          IP ADRESSEN UND INTERFACES
+          ================================================================================
+          {{ ip_addr.stdout }}
+          
+          ================================================================================
+          ROUTING TABELLE
+          ================================================================================
+          {{ ip_route.stdout }}
+          
+          ================================================================================
+          DNS KONFIGURATION (/etc/resolv.conf)
+          ================================================================================
+          {{ resolv_conf.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          /etc/hosts
+          ================================================================================
+          {{ etc_hosts.stdout }}
+          
+          {% if ansible_os_family == "RedHat" %}
+          ================================================================================
+          NETWORKMANAGER VERBINDUNGEN
+          ================================================================================
+          {{ nmcli_connections.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          NETWORKMANAGER DETAILS
+          ================================================================================
+          {{ nmcli_details.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          NETWORK SCRIPTS (/etc/sysconfig/network-scripts/)
+          ================================================================================
+          {{ ifcfg_files.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          FIREWALL STATUS (firewalld)
+          ================================================================================
+          {{ firewalld_status.stdout | default('Nicht verfügbar') }}
+          {% endif %}
+          
+          {% if ansible_os_family == "Debian" %}
+          ================================================================================
+          NETPLAN KONFIGURATION
+          ================================================================================
+          {{ netplan_config.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          NETPLAN STATUS
+          ================================================================================
+          {{ netplan_status.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          FIREWALL STATUS (ufw)
+          ================================================================================
+          {{ ufw_status.stdout | default('Nicht verfügbar') }}
+          {% endif %}
+          
+          {% if ansible_os_family == "Suse" %}
+          ================================================================================
+          WICKED KONFIGURATION
+          ================================================================================
+          {{ wicked_config.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          WICKED STATUS
+          ================================================================================
+          {{ wicked_status.stdout | default('Nicht verfügbar') }}
+          {% endif %}
+          
+          ================================================================================
+          NETZWERK-STATISTIKEN (Offene Ports und Verbindungen)
+          ================================================================================
+          {{ network_stats.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          ENDE DES REPORTS
+          ================================================================================
+        dest: "{{ output_dir }}/network/{{ inventory_hostname }}_network_{{ timestamp }}.txt"
+        mode: '0644'
+
+    - name: Zusammenfassung
+      delegate_to: localhost
+      run_once: true
+      debug:
+        msg: "Netzwerk-Informationen wurden gesammelt in: {{ output_dir }}/network/"
+
+# Made with Bob

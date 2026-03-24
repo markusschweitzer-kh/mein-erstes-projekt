@@ -1,0 +1,151 @@
+---
+- name: Master Playbook - Sammle alle System-Informationen
+  hosts: all
+  gather_facts: yes
+  become: yes
+  
+  vars:
+    output_dir: "./output"
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+    
+  tasks:
+    - name: Erstelle Haupt-Output-Verzeichnis
+      delegate_to: localhost
+      run_once: true
+      file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Erstelle Zeitstempel-Datei
+      delegate_to: localhost
+      run_once: true
+      copy:
+        content: |
+          ================================================================================
+          SYSTEM-INVENTARISIERUNG GESTARTET
+          ================================================================================
+          Zeitstempel: {{ ansible_date_time.iso8601 }}
+          Datum: {{ ansible_date_time.date }}
+          Uhrzeit: {{ ansible_date_time.time }}
+          
+          Anzahl Hosts: {{ ansible_play_hosts | length }}
+          Hosts: {{ ansible_play_hosts | join(', ') }}
+          
+          Sammle folgende Informationen:
+          - Netzwerk-Konfiguration
+          - Benutzer-Informationen
+          - System-Ausstattung
+          
+          ================================================================================
+        dest: "{{ output_dir }}/inventory_run_{{ timestamp }}.txt"
+        mode: '0644'
+
+    - name: Info-Nachricht
+      debug:
+        msg: "Starte Datensammlung für {{ inventory_hostname }}..."
+
+# Netzwerk-Informationen sammeln
+- name: Sammle Netzwerk-Informationen
+  import_playbook: playbooks/collect-network-info.yml
+
+# Benutzer-Informationen sammeln
+- name: Sammle Benutzer-Informationen
+  import_playbook: playbooks/collect-user-info.yml
+
+# System-Informationen sammeln
+- name: Sammle System-Informationen
+  import_playbook: playbooks/collect-system-info.yml
+
+# Abschluss und Zusammenfassung
+- name: Erstelle Zusammenfassung
+  hosts: localhost
+  gather_facts: yes
+  
+  vars:
+    output_dir: "./output"
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+    
+  tasks:
+    - name: Zähle gesammelte Dateien
+      shell: |
+        echo "=== Netzwerk-Reports ==="
+        ls -lh {{ output_dir }}/network/ 2>/dev/null | wc -l
+        echo ""
+        echo "=== Benutzer-Reports ==="
+        ls -lh {{ output_dir }}/users/ 2>/dev/null | wc -l
+        echo ""
+        echo "=== System-Reports ==="
+        ls -lh {{ output_dir }}/system/ 2>/dev/null | wc -l
+      register: file_count
+      ignore_errors: yes
+
+    - name: Erstelle Zusammenfassungs-Report
+      copy:
+        content: |
+          ================================================================================
+          SYSTEM-INVENTARISIERUNG ABGESCHLOSSEN
+          ================================================================================
+          Zeitstempel: {{ ansible_date_time.iso8601 }}
+          Datum: {{ ansible_date_time.date }}
+          Uhrzeit: {{ ansible_date_time.time }}
+          
+          ================================================================================
+          GESAMMELTE DATEIEN
+          ================================================================================
+          {{ file_count.stdout }}
+          
+          ================================================================================
+          VERZEICHNISSTRUKTUR
+          ================================================================================
+          
+          output/
+          ├── network/          # Netzwerk-Konfigurationen aller Hosts
+          ├── users/            # Benutzer-Informationen aller Hosts
+          └── system/           # System-Ausstattung aller Hosts
+          
+          ================================================================================
+          DATEIFORMAT
+          ================================================================================
+          
+          Jede Datei folgt dem Namensschema:
+          <hostname>_<kategorie>_<timestamp>.txt
+          
+          Beispiel:
+          itcopreq40.itc.ibm.com_network_20260324T104500.txt
+          itcopreq40.itc.ibm.com_users_20260324T104500.txt
+          itcopreq40.itc.ibm.com_system_20260324T104500.txt
+          itcopreq40.itc.ibm.com_packages_20260324T104500.txt
+          
+          ================================================================================
+          NÄCHSTE SCHRITTE
+          ================================================================================
+          
+          1. Überprüfe die gesammelten Daten in den jeweiligen Verzeichnissen
+          2. Vergleiche Konfigurationen zwischen verschiedenen Hosts
+          3. Archiviere die Daten für spätere Referenz
+          
+          Zum Archivieren:
+          tar -czf system-inventory-{{ ansible_date_time.date }}.tar.gz output/
+          
+          ================================================================================
+        dest: "{{ output_dir }}/ZUSAMMENFASSUNG_{{ timestamp }}.txt"
+        mode: '0644'
+
+    - name: Zeige Zusammenfassung
+      debug:
+        msg:
+          - "================================================================================"
+          - "INVENTARISIERUNG ABGESCHLOSSEN"
+          - "================================================================================"
+          - "Alle Informationen wurden gesammelt in: {{ output_dir }}/"
+          - ""
+          - "Verzeichnisse:"
+          - "  - {{ output_dir }}/network/  (Netzwerk-Konfigurationen)"
+          - "  - {{ output_dir }}/users/    (Benutzer-Informationen)"
+          - "  - {{ output_dir }}/system/   (System-Ausstattung)"
+          - ""
+          - "Zusammenfassung: {{ output_dir }}/ZUSAMMENFASSUNG_{{ timestamp }}.txt"
+          - "================================================================================"
+
+# Made with Bob

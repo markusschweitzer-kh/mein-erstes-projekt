@@ -1,0 +1,40 @@
+# Output-Verzeichnis mit gesammelten Daten
+output/
+
+# Ansible temporäre Dateien
+*.retry
+.ansible/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs
+*.log
+
+# Backup-Dateien
+*.bak
+*~
+
+# Archive
+*.tar.gz
+*.zip
+*.tar.bz2
+
+# OS-spezifische Dateien
+.DS_Store
+Thumbs.db
+
+# Editor-spezifische Dateien
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Sensible Daten (falls vorhanden)
+secrets.yml
+vault.yml
+*.key
+*.pem

@@ -1,0 +1,492 @@
+---
+- name: Sammle System-Ausstattung von allen Systemen
+  hosts: all
+  gather_facts: yes
+  become: yes
+  
+  vars:
+    output_dir: "../output"
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+    
+  tasks:
+    - name: Erstelle Output-Verzeichnis
+      delegate_to: localhost
+      run_once: true
+      file:
+        path: "{{ output_dir }}/system"
+        state: directory
+        mode: '0755'
+
+    # Hardware-Informationen
+    - name: CPU Informationen
+      command: lscpu
+      register: cpu_info
+
+    - name: CPU Details aus /proc/cpuinfo
+      command: cat /proc/cpuinfo
+      register: proc_cpuinfo
+
+    - name: Memory Informationen
+      command: free -h
+      register: memory_info
+
+    - name: Memory Details aus /proc/meminfo
+      command: cat /proc/meminfo
+      register: proc_meminfo
+
+    - name: Disk Informationen
+      command: df -h
+      register: disk_info
+
+    - name: Disk Details (lsblk)
+      command: lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE,UUID
+      register: lsblk_info
+
+    - name: Partition Informationen
+      command: fdisk -l
+      register: fdisk_info
+      ignore_errors: yes
+
+    - name: Filesystem Informationen
+      command: cat /etc/fstab
+      register: fstab_info
+
+    - name: Mount Points
+      command: mount
+      register: mount_info
+
+    - name: PCI Geräte
+      command: lspci
+      register: pci_devices
+      ignore_errors: yes
+
+    - name: USB Geräte
+      command: lsusb
+      register: usb_devices
+      ignore_errors: yes
+
+    - name: DMI/SMBIOS Informationen
+      command: dmidecode
+      register: dmidecode_info
+      ignore_errors: yes
+
+    # Betriebssystem-Informationen
+    - name: OS Release Informationen
+      command: cat /etc/os-release
+      register: os_release
+
+    - name: Kernel Version
+      command: uname -a
+      register: kernel_version
+
+    - name: Kernel Module
+      command: lsmod
+      register: kernel_modules
+
+    - name: Installierte Kernel
+      shell: |
+        if [ -d /boot ]; then
+          ls -lh /boot/vmlinuz* 2>/dev/null || echo "Keine Kernel gefunden"
+        fi
+      register: installed_kernels
+      ignore_errors: yes
+
+    - name: System Uptime
+      command: uptime
+      register: system_uptime
+
+    - name: Systemd Services Status
+      command: systemctl list-units --type=service --all
+      register: systemd_services
+      ignore_errors: yes
+
+    - name: Enabled Services
+      command: systemctl list-unit-files --type=service --state=enabled
+      register: enabled_services
+      ignore_errors: yes
+
+    # Software-Informationen
+    - name: Installierte Pakete (RHEL/Oracle)
+      command: rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n'
+      register: rpm_packages
+      when: ansible_os_family == "RedHat"
+      ignore_errors: yes
+
+    - name: Installierte Pakete (Ubuntu)
+      command: dpkg -l
+      register: dpkg_packages
+      when: ansible_os_family == "Debian"
+      ignore_errors: yes
+
+    - name: Installierte Pakete (SLES)
+      command: zypper packages --installed-only
+      register: zypper_packages
+      when: ansible_os_family == "Suse"
+      ignore_errors: yes
+
+    - name: Repository Konfiguration (RHEL/Oracle)
+      shell: |
+        echo "=== YUM/DNF Repositories ==="
+        yum repolist all 2>/dev/null || dnf repolist all 2>/dev/null
+        echo ""
+        echo "=== Repository Dateien ==="
+        for file in /etc/yum.repos.d/*.repo; do
+          if [ -f "$file" ]; then
+            echo "--- $file ---"
+            cat "$file"
+            echo ""
+          fi
+        done
+      register: yum_repos
+      when: ansible_os_family == "RedHat"
+      ignore_errors: yes
+
+    - name: Repository Konfiguration (Ubuntu)
+      shell: |
+        echo "=== APT Sources ==="
+        cat /etc/apt/sources.list
+        echo ""
+        echo "=== APT Sources.d ==="
+        for file in /etc/apt/sources.list.d/*; do
+          if [ -f "$file" ]; then
+            echo "--- $file ---"
+            cat "$file"
+            echo ""
+          fi
+        done
+      register: apt_sources
+      when: ansible_os_family == "Debian"
+      ignore_errors: yes
+
+    - name: Repository Konfiguration (SLES)
+      command: zypper repos -d
+      register: zypper_repos
+      when: ansible_os_family == "Suse"
+      ignore_errors: yes
+
+    # Performance und Ressourcen
+    - name: Top Prozesse (CPU)
+      shell: ps aux --sort=-%cpu | head -20
+      register: top_cpu_processes
+
+    - name: Top Prozesse (Memory)
+      shell: ps aux --sort=-%mem | head -20
+      register: top_mem_processes
+
+    - name: Load Average
+      command: cat /proc/loadavg
+      register: load_average
+
+    - name: IO Statistics
+      command: iostat -x 1 2
+      register: io_stats
+      ignore_errors: yes
+
+    # Virtualisierung
+    - name: Virtualisierung erkennen
+      command: systemd-detect-virt
+      register: virt_type
+      ignore_errors: yes
+
+    - name: VM-spezifische Informationen
+      shell: |
+        if command -v virt-what >/dev/null 2>&1; then
+          virt-what
+        else
+          echo "virt-what nicht installiert"
+        fi
+      register: virt_what
+      ignore_errors: yes
+
+    # Sicherheit
+    - name: SELinux Status
+      command: getenforce
+      register: selinux_status
+      when: ansible_os_family == "RedHat"
+      ignore_errors: yes
+
+    - name: AppArmor Status
+      command: aa-status
+      register: apparmor_status
+      when: ansible_os_family == "Debian"
+      ignore_errors: yes
+
+    - name: Offene Dateien Limits
+      command: ulimit -a
+      register: ulimit_info
+      ignore_errors: yes
+
+    # Zeitzone und NTP
+    - name: Zeitzone
+      command: timedatectl
+      register: timezone_info
+      ignore_errors: yes
+
+    - name: NTP Status
+      shell: |
+        if command -v chronyc >/dev/null 2>&1; then
+          echo "=== Chrony Status ==="
+          chronyc tracking
+          echo ""
+          chronyc sources
+        elif command -v ntpq >/dev/null 2>&1; then
+          echo "=== NTP Status ==="
+          ntpq -p
+        else
+          echo "Kein NTP Service gefunden"
+        fi
+      register: ntp_status
+      ignore_errors: yes
+
+    # Logs und Journal
+    - name: Letzte Kernel Messages
+      command: dmesg -T | tail -100
+      register: dmesg_output
+      ignore_errors: yes
+
+    - name: Journal Statistiken
+      command: journalctl --disk-usage
+      register: journal_stats
+      ignore_errors: yes
+
+    # Environment
+    - name: Environment Variablen
+      command: env
+      register: env_vars
+
+    - name: System Limits
+      command: cat /etc/security/limits.conf
+      register: security_limits
+      ignore_errors: yes
+
+    # Speichere alle Informationen in einer Datei pro Host
+    - name: Erstelle System-Report für Host
+      delegate_to: localhost
+      copy:
+        content: |
+          ================================================================================
+          SYSTEM-AUSSTATTUNG: {{ inventory_hostname }}
+          ================================================================================
+          Zeitstempel: {{ ansible_date_time.iso8601 }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Kernel: {{ ansible_kernel }}
+          Architektur: {{ ansible_architecture }}
+          
+          ================================================================================
+          SYSTEM UPTIME
+          ================================================================================
+          {{ system_uptime.stdout }}
+          
+          ================================================================================
+          LOAD AVERAGE
+          ================================================================================
+          {{ load_average.stdout }}
+          
+          ================================================================================
+          CPU INFORMATIONEN
+          ================================================================================
+          {{ cpu_info.stdout }}
+          
+          ================================================================================
+          MEMORY INFORMATIONEN
+          ================================================================================
+          {{ memory_info.stdout }}
+          
+          ================================================================================
+          DISK INFORMATIONEN
+          ================================================================================
+          {{ disk_info.stdout }}
+          
+          ================================================================================
+          BLOCK DEVICES (lsblk)
+          ================================================================================
+          {{ lsblk_info.stdout }}
+          
+          ================================================================================
+          PARTITION INFORMATIONEN (fdisk)
+          ================================================================================
+          {{ fdisk_info.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          FILESYSTEM TABELLE (/etc/fstab)
+          ================================================================================
+          {{ fstab_info.stdout }}
+          
+          ================================================================================
+          AKTUELLE MOUNT POINTS
+          ================================================================================
+          {{ mount_info.stdout }}
+          
+          ================================================================================
+          VIRTUALISIERUNG
+          ================================================================================
+          Typ: {{ virt_type.stdout | default('Nicht erkannt') }}
+          Details: {{ virt_what.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          PCI GERÄTE
+          ================================================================================
+          {{ pci_devices.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          USB GERÄTE
+          ================================================================================
+          {{ usb_devices.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          OS RELEASE INFORMATIONEN
+          ================================================================================
+          {{ os_release.stdout }}
+          
+          ================================================================================
+          KERNEL VERSION
+          ================================================================================
+          {{ kernel_version.stdout }}
+          
+          ================================================================================
+          INSTALLIERTE KERNEL
+          ================================================================================
+          {{ installed_kernels.stdout }}
+          
+          ================================================================================
+          ZEITZONE UND NTP
+          ================================================================================
+          {{ timezone_info.stdout | default('Nicht verfügbar') }}
+          
+          {{ ntp_status.stdout | default('Nicht verfügbar') }}
+          
+          {% if ansible_os_family == "RedHat" %}
+          ================================================================================
+          SELINUX STATUS
+          ================================================================================
+          {{ selinux_status.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          YUM/DNF REPOSITORIES
+          ================================================================================
+          {{ yum_repos.stdout | default('Nicht verfügbar') }}
+          {% endif %}
+          
+          {% if ansible_os_family == "Debian" %}
+          ================================================================================
+          APPARMOR STATUS
+          ================================================================================
+          {{ apparmor_status.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          APT REPOSITORIES
+          ================================================================================
+          {{ apt_sources.stdout | default('Nicht verfügbar') }}
+          {% endif %}
+          
+          {% if ansible_os_family == "Suse" %}
+          ================================================================================
+          ZYPPER REPOSITORIES
+          ================================================================================
+          {{ zypper_repos.stdout | default('Nicht verfügbar') }}
+          {% endif %}
+          
+          ================================================================================
+          SYSTEMD SERVICES (alle)
+          ================================================================================
+          {{ systemd_services.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          ENABLED SERVICES
+          ================================================================================
+          {{ enabled_services.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          TOP CPU PROZESSE
+          ================================================================================
+          {{ top_cpu_processes.stdout }}
+          
+          ================================================================================
+          TOP MEMORY PROZESSE
+          ================================================================================
+          {{ top_mem_processes.stdout }}
+          
+          ================================================================================
+          IO STATISTIKEN
+          ================================================================================
+          {{ io_stats.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          ULIMIT INFORMATIONEN
+          ================================================================================
+          {{ ulimit_info.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          SECURITY LIMITS (/etc/security/limits.conf)
+          ================================================================================
+          {{ security_limits.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          JOURNAL STATISTIKEN
+          ================================================================================
+          {{ journal_stats.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          LETZTE KERNEL MESSAGES (dmesg, letzte 100 Zeilen)
+          ================================================================================
+          {{ dmesg_output.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          KERNEL MODULE
+          ================================================================================
+          {{ kernel_modules.stdout }}
+          
+          ================================================================================
+          DMI/SMBIOS INFORMATIONEN
+          ================================================================================
+          {{ dmidecode_info.stdout | default('Nicht verfügbar (benötigt root)') }}
+          
+          ================================================================================
+          DETAILLIERTE CPU INFORMATIONEN (/proc/cpuinfo)
+          ================================================================================
+          {{ proc_cpuinfo.stdout }}
+          
+          ================================================================================
+          DETAILLIERTE MEMORY INFORMATIONEN (/proc/meminfo)
+          ================================================================================
+          {{ proc_meminfo.stdout }}
+          
+          ================================================================================
+          ENVIRONMENT VARIABLEN
+          ================================================================================
+          {{ env_vars.stdout }}
+          
+          ================================================================================
+          ENDE DES REPORTS
+          ================================================================================
+        dest: "{{ output_dir }}/system/{{ inventory_hostname }}_system_{{ timestamp }}.txt"
+        mode: '0644'
+
+    # Erstelle separate Paketliste (kann sehr groß sein)
+    - name: Erstelle Paketliste für Host
+      delegate_to: localhost
+      copy:
+        content: |
+          ================================================================================
+          INSTALLIERTE PAKETE: {{ inventory_hostname }}
+          ================================================================================
+          Zeitstempel: {{ ansible_date_time.iso8601 }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          
+          {% if ansible_os_family == "RedHat" %}
+          {{ rpm_packages.stdout | default('Nicht verfügbar') }}
+          {% elif ansible_os_family == "Debian" %}
+          {{ dpkg_packages.stdout | default('Nicht verfügbar') }}
+          {% elif ansible_os_family == "Suse" %}
+          {{ zypper_packages.stdout | default('Nicht verfügbar') }}
+          {% endif %}
+        dest: "{{ output_dir }}/system/{{ inventory_hostname }}_packages_{{ timestamp }}.txt"
+        mode: '0644'
+
+    - name: Zusammenfassung
+      delegate_to: localhost
+      run_once: true
+      debug:
+        msg: "System-Informationen wurden gesammelt in: {{ output_dir }}/system/"
+
+# Made with Bob

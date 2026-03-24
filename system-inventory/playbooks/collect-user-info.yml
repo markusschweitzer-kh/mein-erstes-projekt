@@ -1,0 +1,247 @@
+---
+- name: Sammle Benutzer-Informationen von allen Systemen
+  hosts: all
+  gather_facts: yes
+  become: yes
+  
+  vars:
+    output_dir: "../output"
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+    
+  tasks:
+    - name: Erstelle Output-Verzeichnis
+      delegate_to: localhost
+      run_once: true
+      file:
+        path: "{{ output_dir }}/users"
+        state: directory
+        mode: '0755'
+
+    # Benutzer-Informationen sammeln
+    - name: Lese /etc/passwd
+      command: cat /etc/passwd
+      register: etc_passwd
+
+    - name: Lese /etc/group
+      command: cat /etc/group
+      register: etc_group
+
+    - name: Lese /etc/shadow (nur Metadaten, keine Passwörter)
+      shell: |
+        echo "=== Shadow File Informationen (ohne Passwort-Hashes) ==="
+        awk -F: '{print $1":"$3":"$4":"$5":"$6":"$7":"$8":"$9}' /etc/shadow
+      register: etc_shadow_info
+      ignore_errors: yes
+
+    - name: Liste alle Benutzer mit UID >= 1000 (normale Benutzer)
+      shell: |
+        awk -F: '$3 >= 1000 && $3 < 65534 {print $1":"$3":"$4":"$5":"$6":"$7}' /etc/passwd
+      register: normal_users
+
+    - name: Liste alle System-Benutzer (UID < 1000)
+      shell: |
+        awk -F: '$3 < 1000 {print $1":"$3":"$4":"$5":"$6":"$7}' /etc/passwd
+      register: system_users
+
+    - name: Benutzer mit Login-Shell
+      shell: |
+        grep -v 'nologin\|false' /etc/passwd | awk -F: '{print $1":"$3":"$7}'
+      register: users_with_shell
+      ignore_errors: yes
+
+    - name: Aktuell angemeldete Benutzer
+      command: who
+      register: logged_in_users
+      ignore_errors: yes
+
+    - name: Letzte Logins
+      command: last -n 50
+      register: last_logins
+      ignore_errors: yes
+
+    - name: Sudo-Berechtigungen
+      shell: |
+        echo "=== Sudoers Datei ==="
+        cat /etc/sudoers 2>/dev/null || echo "Keine Berechtigung"
+        echo ""
+        echo "=== Sudoers.d Verzeichnis ==="
+        if [ -d /etc/sudoers.d ]; then
+          for file in /etc/sudoers.d/*; do
+            if [ -f "$file" ]; then
+              echo "--- $file ---"
+              cat "$file" 2>/dev/null || echo "Keine Berechtigung"
+              echo ""
+            fi
+          done
+        fi
+      register: sudo_config
+      ignore_errors: yes
+
+    - name: Mitglieder der wichtigen Gruppen
+      shell: |
+        echo "=== Root Gruppe ==="
+        getent group root
+        echo ""
+        echo "=== Wheel/Sudo Gruppe ==="
+        getent group wheel 2>/dev/null || getent group sudo 2>/dev/null || echo "Keine wheel/sudo Gruppe"
+        echo ""
+        echo "=== SSH Gruppe ==="
+        getent group ssh 2>/dev/null || echo "Keine ssh Gruppe"
+        echo ""
+        echo "=== Docker Gruppe ==="
+        getent group docker 2>/dev/null || echo "Keine docker Gruppe"
+      register: important_groups
+      ignore_errors: yes
+
+    - name: SSH authorized_keys für wichtige Benutzer
+      shell: |
+        echo "=== SSH Authorized Keys ==="
+        for user in root $(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd); do
+          home=$(getent passwd "$user" | cut -d: -f6)
+          if [ -f "$home/.ssh/authorized_keys" ]; then
+            echo "--- Benutzer: $user ---"
+            echo "Anzahl Keys: $(wc -l < "$home/.ssh/authorized_keys")"
+            cat "$home/.ssh/authorized_keys" | head -5
+            echo ""
+          fi
+        done
+      register: ssh_keys
+      ignore_errors: yes
+
+    - name: Passwort-Richtlinien
+      shell: |
+        echo "=== PAM Password Quality ==="
+        if [ -f /etc/security/pwquality.conf ]; then
+          cat /etc/security/pwquality.conf | grep -v '^#' | grep -v '^$'
+        else
+          echo "Keine pwquality.conf gefunden"
+        fi
+        echo ""
+        echo "=== Login Definitions ==="
+        if [ -f /etc/login.defs ]; then
+          grep -E '^(PASS_MAX_DAYS|PASS_MIN_DAYS|PASS_MIN_LEN|PASS_WARN_AGE)' /etc/login.defs
+        fi
+      register: password_policies
+      ignore_errors: yes
+
+    - name: Benutzer-Statistiken
+      shell: |
+        echo "=== Benutzer-Statistiken ==="
+        echo "Gesamtanzahl Benutzer: $(wc -l < /etc/passwd)"
+        echo "Normale Benutzer (UID >= 1000): $(awk -F: '$3 >= 1000 && $3 < 65534' /etc/passwd | wc -l)"
+        echo "System-Benutzer (UID < 1000): $(awk -F: '$3 < 1000' /etc/passwd | wc -l)"
+        echo "Benutzer mit Login-Shell: $(grep -v 'nologin\|false' /etc/passwd | wc -l)"
+        echo ""
+        echo "Gesamtanzahl Gruppen: $(wc -l < /etc/group)"
+      register: user_statistics
+
+    - name: Cron Jobs der Benutzer
+      shell: |
+        echo "=== Cron Jobs ==="
+        for user in $(cut -f1 -d: /etc/passwd); do
+          crontab -u "$user" -l 2>/dev/null && echo "--- Benutzer: $user ---" || true
+        done
+        echo ""
+        echo "=== System Cron ==="
+        [ -f /etc/crontab ] && cat /etc/crontab || echo "Keine /etc/crontab"
+      register: cron_jobs
+      ignore_errors: yes
+
+    # Speichere alle Informationen in einer Datei pro Host
+    - name: Erstelle Benutzer-Report für Host
+      delegate_to: localhost
+      copy:
+        content: |
+          ================================================================================
+          BENUTZER-INFORMATIONEN: {{ inventory_hostname }}
+          ================================================================================
+          Zeitstempel: {{ ansible_date_time.iso8601 }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Kernel: {{ ansible_kernel }}
+          
+          ================================================================================
+          BENUTZER-STATISTIKEN
+          ================================================================================
+          {{ user_statistics.stdout }}
+          
+          ================================================================================
+          NORMALE BENUTZER (UID >= 1000)
+          ================================================================================
+          Format: Benutzername:UID:GID:Beschreibung:Home:Shell
+          {{ normal_users.stdout }}
+          
+          ================================================================================
+          SYSTEM-BENUTZER (UID < 1000)
+          ================================================================================
+          Format: Benutzername:UID:GID:Beschreibung:Home:Shell
+          {{ system_users.stdout }}
+          
+          ================================================================================
+          BENUTZER MIT LOGIN-SHELL
+          ================================================================================
+          Format: Benutzername:UID:Shell
+          {{ users_with_shell.stdout | default('Keine gefunden') }}
+          
+          ================================================================================
+          AKTUELL ANGEMELDETE BENUTZER
+          ================================================================================
+          {{ logged_in_users.stdout | default('Keine angemeldet') }}
+          
+          ================================================================================
+          LETZTE LOGINS (50 Einträge)
+          ================================================================================
+          {{ last_logins.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          WICHTIGE GRUPPEN UND MITGLIEDER
+          ================================================================================
+          {{ important_groups.stdout }}
+          
+          ================================================================================
+          SUDO-KONFIGURATION
+          ================================================================================
+          {{ sudo_config.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          SSH AUTHORIZED KEYS
+          ================================================================================
+          {{ ssh_keys.stdout | default('Keine gefunden') }}
+          
+          ================================================================================
+          PASSWORT-RICHTLINIEN
+          ================================================================================
+          {{ password_policies.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          SHADOW FILE INFORMATIONEN (ohne Passwort-Hashes)
+          ================================================================================
+          {{ etc_shadow_info.stdout | default('Nicht verfügbar') }}
+          
+          ================================================================================
+          CRON JOBS
+          ================================================================================
+          {{ cron_jobs.stdout | default('Keine gefunden') }}
+          
+          ================================================================================
+          VOLLSTÄNDIGE /etc/passwd
+          ================================================================================
+          {{ etc_passwd.stdout }}
+          
+          ================================================================================
+          VOLLSTÄNDIGE /etc/group
+          ================================================================================
+          {{ etc_group.stdout }}
+          
+          ================================================================================
+          ENDE DES REPORTS
+          ================================================================================
+        dest: "{{ output_dir }}/users/{{ inventory_hostname }}_users_{{ timestamp }}.txt"
+        mode: '0644'
+
+    - name: Zusammenfassung
+      delegate_to: localhost
+      run_once: true
+      debug:
+        msg: "Benutzer-Informationen wurden gesammelt in: {{ output_dir }}/users/"
+
+# Made with Bob
