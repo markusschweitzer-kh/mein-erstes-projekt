@@ -40,17 +40,14 @@
       register: disk_info
 
     - name: Disk Details (lsblk)
-      command: lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE,UUID
+      shell: timeout 30 lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE,UUID
       register: lsblk_info
-      async: 30
-      poll: 5
+      ignore_errors: yes
 
     - name: Partition Informationen
-      command: fdisk -l
+      shell: timeout 30 fdisk -l
       register: fdisk_info
       ignore_errors: yes
-      async: 30
-      poll: 5
 
     - name: Filesystem Informationen
       command: cat /etc/fstab
@@ -71,11 +68,9 @@
       ignore_errors: yes
 
     - name: DMI/SMBIOS Informationen
-      command: dmidecode
+      shell: timeout 30 dmidecode
       register: dmidecode_info
       ignore_errors: yes
-      async: 30
-      poll: 5
 
     # Betriebssystem-Informationen
     - name: OS Release Informationen
