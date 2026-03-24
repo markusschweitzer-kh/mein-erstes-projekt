@@ -36,39 +36,42 @@
       register: proc_meminfo
 
     - name: Disk Informationen
-      command: df -h
+      shell: timeout 20 df -h
       register: disk_info
+      ignore_errors: yes
 
     - name: Disk Details (lsblk)
-      shell: timeout 30 lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE,UUID
+      shell: timeout 20 lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE,UUID
       register: lsblk_info
       ignore_errors: yes
 
     - name: Partition Informationen
-      shell: timeout 30 fdisk -l
+      shell: timeout 20 fdisk -l
       register: fdisk_info
       ignore_errors: yes
 
     - name: Filesystem Informationen
-      command: cat /etc/fstab
+      shell: timeout 10 cat /etc/fstab
       register: fstab_info
+      ignore_errors: yes
 
     - name: Mount Points
-      command: mount
+      shell: timeout 10 mount
       register: mount_info
+      ignore_errors: yes
 
     - name: PCI Geräte
-      command: lspci
+      shell: timeout 15 lspci
       register: pci_devices
       ignore_errors: yes
 
     - name: USB Geräte
-      command: lsusb
+      shell: timeout 10 lsusb
       register: usb_devices
       ignore_errors: yes
 
     - name: DMI/SMBIOS Informationen
-      shell: timeout 30 dmidecode
+      shell: timeout 20 dmidecode
       register: dmidecode_info
       ignore_errors: yes
 
@@ -82,8 +85,9 @@
       register: kernel_version
 
     - name: Kernel Module
-      command: lsmod
+      shell: timeout 10 lsmod
       register: kernel_modules
+      ignore_errors: yes
 
     - name: Installierte Kernel
       shell: |
@@ -98,18 +102,18 @@
       register: system_uptime
 
     - name: Systemd Services Status
-      command: systemctl list-units --type=service --all
+      shell: timeout 30 systemctl list-units --type=service --all
       register: systemd_services
       ignore_errors: yes
 
     - name: Enabled Services
-      command: systemctl list-unit-files --type=service --state=enabled
+      shell: timeout 20 systemctl list-unit-files --type=service --state=enabled
       register: enabled_services
       ignore_errors: yes
 
     # Software-Informationen
     - name: Installierte Pakete (RHEL/Oracle)
-      command: rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n'
+      shell: timeout 60 rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n'
       register: rpm_packages
       when: ansible_os_family == "RedHat"
       ignore_errors: yes
