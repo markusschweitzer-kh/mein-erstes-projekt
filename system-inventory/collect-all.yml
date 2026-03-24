@@ -17,8 +17,6 @@
         path: "{{ output_dir }}"
         state: directory
         mode: '0755'
-        owner: "{{ lookup('env', 'USER') }}"
-        group: "{{ lookup('env', 'USER') }}"
 
     - name: Erstelle Zeitstempel-Datei
       delegate_to: localhost

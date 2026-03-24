@@ -17,8 +17,6 @@
         path: "{{ output_dir }}/users"
         state: directory
         mode: '0755'
-        owner: "{{ lookup('env', 'USER') }}"
-        group: "{{ lookup('env', 'USER') }}"
 
     # Benutzer-Informationen sammeln
     - name: Lese /etc/passwd

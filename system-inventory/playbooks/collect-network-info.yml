@@ -17,8 +17,6 @@
         path: "{{ output_dir }}/network"
         state: directory
         mode: '0755'
-        owner: "{{ lookup('env', 'USER') }}"
-        group: "{{ lookup('env', 'USER') }}"
 
     - name: Erkenne OS-Familie
       set_fact:
