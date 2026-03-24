@@ -5,7 +5,7 @@
   become: yes
   
   vars:
-    output_dir: "../output"
+    output_dir: "{{ playbook_dir }}/../output"
     timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
     
   tasks:
